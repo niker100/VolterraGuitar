@@ -34,6 +34,31 @@ uv run vguitar bench --circuit bjt   # train + compare all models
 uv run vguitar live  --model tcn     # play guitar through it
 ```
 
+## CIRCE — the conditioned, interactive model
+
+**CIRCE** (`vguitar.models.circe`) is the project's SOTA model: a small dilated
+TCN with a real-time cached-streaming kernel, conditioned by **per-block FiLM**
+so analog controls (potentiometers, switches, slow drift) are first-class — you
+can turn the knobs live. It's trained on SPICE **parametric sweeps** of the
+control, and **interpolates to control settings never simulated**. See
+[`docs/CIRCE-design.md`](docs/CIRCE-design.md) for the (adversarially reviewed)
+architecture.
+
+```python
+from vguitar.circuits import get_circuit
+from vguitar.spice.runner import make_drive_dataset
+from vguitar.models.circe import CIRCE
+
+ds = make_drive_dataset(get_circuit("bjt"), [0.005, 0.02, 0.04, 0.08, 0.16])  # sweep a "drive" knob
+m = CIRCE(n_control=1); m.fit(*ds.split()[:2])
+y = m.process(x, c=[0.06])          # emulate at a drive setting (incl. unseen ones)
+y = m.process_block(block, c=[g])   # real-time, knob g changeable per block
+```
+
+On a BJT overdrive drive-sweep this reaches ESR ~0.08 across the whole
+clean→hard-clip range and interpolates to held-out knob settings (see
+`outputs/figs/bjt_circe_*.png`).
+
 ## Dev
 
 ```bash

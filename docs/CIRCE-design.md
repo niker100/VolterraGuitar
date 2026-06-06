@@ -287,7 +287,19 @@ ngspice parallelism**.
   headroom for inline FiLM. (Implemented in `models/tcn.py`.)
 - **Data substrate — IN PLACE.** `Dataset` extended with `controls (N,C)` + `control_names` /
   `control_kinds` + `from_segments`, backward-compatible (`data.py`), tested.
-- **NEXT — GATE-2 (the pivotal cheap experiment):** generate a one-knob (drive) conditioned BJT
-  dataset (grid + held-out off-grid), add `process_block(x, c)` + a concat-conditioned TCN
-  baseline, and test interpolation to unseen drive settings. If a plain baseline already
-  interpolates, the FiLM/Lipschitz machinery may be unnecessary; if it can't, it's a data problem.
+- **GATE-2 + GATE-3 — conditioning & interpolation — PASS.** Built the conditioned data substrate
+  (`make_drive_dataset`: drive = pre-gain knob; model sees dry input + drive control, target =
+  `circuit(g·input)`) and **CIRCE** (`models/circe.py`): the small-TCN backbone + cached streaming +
+  **per-block FiLM** from a tiny zero-init conditioner + a hard-limit (`clamp ±A`) output saturator.
+  `process(x, c)` / `process_block(x, c)`; streaming == offline at a control to ~2e-6; RTF ~3×.
+  On a real BJT **drive sweep** (5 trained settings 5–160 mV + 3 held-out, clean→hard-clip):
+  **ESR 0.076 trained / 0.088 held-out** (16.7k params) — interpolates to unseen knob settings
+  (held-out barely worse than trained), and beats the best *unconditioned, fixed-operating-point*
+  model (TCN 0.236) while adding a working interactive knob. The THD-vs-drive curve tracks the
+  circuit across low/mid drive; **residual limitation**: under-captures the most extreme hard-clip
+  (THD 0.38 vs 0.65 at 160 mV) — a small-model/edge-rounding shortfall (more capacity/training, or
+  ADAA per GATE-5, would help). Figures: `outputs/figs/bjt_circe_{thd,waveform}.png`.
+- **REMAINING (future):** GATE-4 (moving-control stability tests, dwell/slew), GATE-5 (ADAA +
+  alias-free fine-tune for the hard-clip extreme), GATE-6 (multi-stage + multi-control + active
+  learning, nonlinear-feedback gap). The core conditioned/interactive emulator is proven; these
+  extend robustness, anti-aliasing, and control dimensionality.
