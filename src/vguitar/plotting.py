@@ -49,6 +49,7 @@ MODEL_COLORS = {
     "tcn": OKABE_ITO["vermillion"],
     "rnn": OKABE_ITO["orange"],
     "ssm": OKABE_ITO["purple"],
+    "circe": OKABE_ITO["purple"],  # the conditioned hero model
 }
 
 # Fixed colormap roles (one meaning each).
@@ -256,5 +257,34 @@ def fig_leaderboard(rows: list[dict], name: str = "") -> Figure:
                color=[color_for(r["model"]) for r in order])
     ax[1].set(xscale="log", xlabel="ESR", title="(b) accuracy ranking")
     ax[1].invert_yaxis()
+    fig.tight_layout()
+    return fig
+
+
+# --- conditioned model: response across a control sweep ----------------------
+def fig_control_response(control_vals: np.ndarray, circuit_y: np.ndarray, model_y: np.ndarray,
+                         *, held_mask: np.ndarray | None = None, ylabel: str = "THD",
+                         control_name: str = "drive", name: str = "") -> Figure:
+    """A metric (e.g. THD, output level) vs a control knob: circuit (black) vs a
+    conditioned model (colour). Trained settings are filled markers; **held-out
+    (interpolated) settings are open markers** — if they land on the circuit
+    curve, the model interpolates the knob correctly."""
+    cv = np.asarray(control_vals, dtype=np.float64)
+    order = np.argsort(cv)
+    cv = cv[order]
+    cy = np.asarray(circuit_y, dtype=np.float64)[order]
+    my = np.asarray(model_y, dtype=np.float64)[order]
+    held = (np.zeros(len(cv), bool) if held_mask is None else np.asarray(held_mask, bool)[order])
+    col = color_for("circe")
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.2))
+    ax.plot(cv, cy, "-o", color="k", lw=1.8, ms=5, label="circuit", zorder=3)
+    ax.plot(cv, my, "-", color=col, lw=1.3, label="CIRCE", zorder=2)
+    ax.scatter(cv[~held], my[~held], s=45, color=col, zorder=4, label="trained")
+    if held.any():
+        ax.scatter(cv[held], my[held], s=80, facecolor="white", edgecolor=col, linewidth=1.6,
+                   zorder=5, label="held-out (interpolated)")
+    ax.set(title=f"{name} {ylabel} vs {control_name}", xlabel=control_name, ylabel=ylabel)
+    ax.legend(fontsize=8)
     fig.tight_layout()
     return fig
