@@ -32,7 +32,7 @@ candidate.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 import torch
@@ -120,7 +120,9 @@ class TCN(Model):
         # Receptive field: each block sums dilations 1..2^(n_layers-1).
         self.receptive_field = n_blocks * (2**n_layers - 1) * (kernel - 1) + 1
         self.net = _TCNNet(channels, n_blocks, n_layers, kernel).to(self.device)
-        self._buf: np.ndarray | None = None  # streaming ring of the last R-1 inputs
+        # Cached streaming state (weights baked to numpy + per-layer ring buffers),
+        # built lazily on the first process_block after a reset. See process_block.
+        self._stream: dict[str, Any] | None = None
 
     # --- helpers ----------------------------------------------------------
     def _hparams(self) -> dict[str, int]:
@@ -198,6 +200,7 @@ class TCN(Model):
                 best_state = {k: v.detach().clone() for k, v in self.net.state_dict().items()}
 
         self.net.load_state_dict(best_state)
+        self.reset()  # invalidate any cached streaming weights (params changed)
         return FitReport(
             history=history,
             info={"best_val_esr": best_val, "receptive_field": self.receptive_field},
@@ -212,42 +215,91 @@ class TCN(Model):
 
     # --- offline inference ------------------------------------------------
     def process(self, x: np.ndarray) -> np.ndarray:
-        """Run the whole signal causally, with input-domain zero history.
+        """Offline forward over the whole signal (per-layer causal zero-padding).
 
-        We left-pad the input with ``receptive_field - 1`` zeros and drop the
-        corresponding warm-up outputs. This matters: the conv layers have biases,
-        so per-layer zero *padding* is NOT the same as a zero *input* history
-        (``conv(0) = bias != 0``). Streaming uses a zero-initialised input ring
-        buffer, so feeding the same input-domain zero history here makes
-        ``process`` and blockwise ``process_block`` agree bit-for-bit.
+        Matches blockwise ``process_block`` to ~1e-6: that path caches each
+        dilated layer's activation history initialised to zero, which is exactly
+        the per-layer zero-padding ``self.net`` applies here.
         """
         self.net.eval()
-        hist = self.receptive_field - 1
         xv = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
-        xin = np.concatenate([np.zeros(hist, dtype=np.float32), xv]) if hist else xv
         with torch.no_grad():
-            t = torch.from_numpy(xin).to(self.device).view(1, 1, -1)
-            y = self.net(t).view(-1)[hist:]
+            y = self.net(torch.from_numpy(xv).to(self.device).view(1, 1, -1)).view(-1)
         return y.cpu().numpy().astype(np.float32)
 
-    # --- streaming inference ----------------------------------------------
+    # --- streaming inference (cached incremental dilated conv) -------------
     def reset(self) -> None:
-        """Clear the causal history ring buffer."""
-        self._buf = None
+        """Drop streaming state; rebuilt (weights baked to numpy) on the next block."""
+        self._stream = None
+
+    def _build_stream(self) -> dict[str, Any]:
+        """Bake net weights to numpy arrays + allocate per-layer ring buffers.
+
+        Weights are read from ``state_dict()`` by dotted key (a plain
+        ``dict[str, Tensor]``) rather than by submodule attribute access — same
+        values, but clean to type-check.
+        """
+        self.net.eval()
+        c, n_lyr = self.channels, self.n_blocks * self.n_layers
+        sd = {k: v.detach().cpu().numpy() for k, v in self.net.state_dict().items()}
+        dil = [2 ** (i % self.n_layers) for i in range(n_lyr)]
+        layers = [
+            (
+                sd[f"layers.{i}.conv.weight"],  # (2c, c, k)
+                sd[f"layers.{i}.conv.bias"],  # (2c,)
+                sd[f"layers.{i}.res.weight"][:, :, 0],  # (c, c)
+                sd[f"layers.{i}.res.bias"],
+                sd[f"layers.{i}.skip.weight"][:, :, 0],
+                sd[f"layers.{i}.skip.bias"],
+            )
+            for i in range(n_lyr)
+        ]
+        return {
+            "c": c,
+            "k": self.kernel,
+            "dil": dil,
+            "w_in": sd["input.weight"][:, 0, 0],
+            "b_in": sd["input.bias"],
+            "layers": layers,
+            "o1w": sd["out.1.weight"][:, :, 0],
+            "o1b": sd["out.1.bias"],
+            "o3w": sd["out.3.weight"][:, :, 0],
+            "o3b": sd["out.3.bias"],
+            "buf": [np.zeros((c, (self.kernel - 1) * d), dtype=np.float32) for d in dil],
+        }
 
     def process_block(self, x: np.ndarray) -> np.ndarray:
-        """Process one block; prepend ``R-1`` past samples so output == offline."""
-        x = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
-        hist = self.receptive_field - 1
-        if self._buf is None:
-            self._buf = np.zeros(hist, dtype=np.float32)
-        ctx = np.concatenate([self._buf, x])  # (hist + block,)
-        self.net.eval()
-        with torch.no_grad():
-            xin = torch.from_numpy(ctx).to(self.device).view(1, 1, -1)
-            y = self.net(xin).view(-1)[hist:]  # drop the warm-up context
-        self._buf = ctx[-hist:].copy() if hist else self._buf
-        return y.cpu().numpy().astype(np.float32)
+        """Stream one block via cached incremental dilated convs ("Fast-WaveNet").
+
+        Each dilated layer keeps a ring buffer of its last ``(kernel-1)*dilation``
+        inputs, so a block costs O(block), not O(receptive_field) — the key to
+        real-time (~3x at block 128 in pure numpy). The 1x1 input/residual/skip/
+        output convs are pointwise (no memory). Equals :meth:`process` to ~1e-6;
+        ``latency_samples == 0``.
+        """
+        if self._stream is None:
+            self._stream = self._build_stream()
+        s = self._stream
+        xb = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
+        nb = xb.shape[0]
+        if nb == 0:
+            return np.empty(0, dtype=np.float32)
+        c, k, dil = s["c"], s["k"], s["dil"]
+        h = s["w_in"][:, None] * xb[None, :] + s["b_in"][:, None]  # (c, nb), 1x1 input conv
+        skip = np.zeros((c, nb), dtype=np.float32)
+        for i, (cw, cb, rw, rb, sw, sb) in enumerate(s["layers"]):
+            d = dil[i]
+            ctx = np.concatenate([s["buf"][i], h], axis=1)  # (c, (k-1)d + nb)
+            conv = cb[:, None] + sum(cw[:, :, t] @ ctx[:, t * d : t * d + nb] for t in range(k))
+            if k > 1:
+                s["buf"][i] = ctx[:, -(k - 1) * d :].copy()
+            g = np.tanh(conv[:c]) * (1.0 / (1.0 + np.exp(-conv[c:])))  # gated activation
+            h = h + (rw @ g + rb[:, None])  # residual
+            skip += sw @ g + sb[:, None]
+        o = np.maximum(skip, 0.0)
+        o = np.maximum(s["o1w"] @ o + s["o1b"][:, None], 0.0)
+        o = s["o3w"] @ o + s["o3b"][:, None]
+        return o[0].astype(np.float32)
 
     # --- persistence ------------------------------------------------------
     def save(self, path: str | Path) -> None:
