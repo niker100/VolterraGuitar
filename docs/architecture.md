@@ -9,7 +9,7 @@ interchangeable and directly comparable.
 | Contract | File | What it is |
 |---|---|---|
 | `Circuit` | `circuits/base.py` | A raw ngspice **netlist** with a driven input source `Vin` (node `in`) and output node `out`. Plain text = readable & portable. |
-| `Dataset` | `data.py` | Aligned `(x, y)` mono float32 signals at one sample rate; `.split()`, `.save()/.load()` (npz). |
+| `Dataset` | `data.py` | Aligned `(x, y)` mono float32 signals at one sample rate, plus optional exogenous `controls` `(N, C)` (`control_names`/`control_kinds`) for conditioned models; `.split()`, `.save()/.load()` (npz, back-compatible with control-free files). |
 | `Model` | `models/base.py` | `fit(train, val, cfg)`, offline `process(x)`, **streaming** `reset()` + `process_block(x)`, `save/load`, `num_params()`. |
 
 The **streaming invariant**: `process(x)` and a sequence of `process_block`
