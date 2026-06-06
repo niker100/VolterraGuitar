@@ -49,6 +49,9 @@ class Model(ABC):
     description: ClassVar[str] = ""
     #: Algorithmic output latency in samples (lookahead). 0 for causal models.
     latency_samples: int = 0
+    #: True for models that require an exogenous-control dataset (see CIRCE);
+    #: such models are skipped by the unconditioned benchmark / generic tests.
+    conditioned: ClassVar[bool] = False
 
     # --- learning ---------------------------------------------------------
     @abstractmethod

@@ -279,3 +279,65 @@ def make_dataset(circuit: Circuit, cfg: Config) -> Dataset:
             "netlist_len": len(circuit.netlist()),
         },
     )
+
+
+def make_drive_dataset(
+    circuit: Circuit,
+    drive_values: list[float],
+    cfg: Config | None = None,
+    *,
+    seg_dur_s: float = 3.0,
+    seed: int = 0,
+) -> Dataset:
+    """Generate a CONDITIONED dataset for one continuous "drive" control.
+
+    The drive knob is modelled as a pre-gain into the stage (as in a real
+    overdrive pedal): the model input is the *dry* excitation; the target is the
+    circuit driven at ``g * input`` for each ``g`` in ``drive_values``. Each
+    drive value gets its own rich excitation chunk (different seed) so the model
+    must generalize over both input content and the knob. The control column is
+    the (raw) drive value ``g`` per segment; interpolation to unseen ``g`` is
+    tested by holding values out of ``drive_values``.
+
+    Args:
+        circuit: circuit to characterize.
+        drive_values: the drive settings ``g`` to simulate (one segment each).
+        cfg: pipeline config (defaults to :class:`Config`).
+        seg_dur_s: duration of each per-setting excitation chunk.
+        seed: base RNG seed (offset per segment for distinct excitations).
+
+    Returns:
+        A conditioned :class:`Dataset` with a single ``"drive"`` control column.
+    """
+    from dataclasses import replace
+
+    from vguitar.config import Config
+    from vguitar.data import Dataset
+    from vguitar.signals import build_training_excitation
+
+    cfg = cfg or Config()
+    sr = cfg.data.sr
+    xs: list[np.ndarray] = []
+    ys: list[np.ndarray] = []
+    bounds: list[int] = [0]
+    values: list[list[float]] = []
+    for j, g in enumerate(drive_values):
+        # Unit-peak, content-rich dry excitation (single drive level; the knob does the scaling).
+        dcfg = replace(cfg.data, duration_s=seg_dur_s, drive_levels=(1.0,), seed=seed + j)
+        base = build_training_excitation(dcfg)
+        y = simulate(circuit, (float(g) * base).astype(np.float32), sr, cfg.sim)
+        xs.append(base)
+        ys.append(y)
+        values.append([float(g)])
+        bounds.append(bounds[-1] + len(base))
+    return Dataset.from_segments(
+        np.concatenate(xs),
+        np.concatenate(ys),
+        sr,
+        bounds,
+        np.asarray(values, dtype=np.float32),
+        name=f"{circuit.name}_drive",
+        meta={"circuit": circuit.name, "control": "drive", "drive_values": [float(g) for g in drive_values]},
+        control_names=["drive"],
+        control_kinds=["continuous"],
+    )

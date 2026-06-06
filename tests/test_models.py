@@ -17,7 +17,9 @@ from vguitar.models import all_models, get_model
 from vguitar.models.base import check_streaming
 
 SR = 8000
-MODELS = sorted(all_models())
+# Conditioned models (CIRCE) need an exogenous-control dataset; they have their
+# own test (test_circe.py). The generic contract test covers unconditioned ones.
+MODELS = sorted(n for n, cls in all_models().items() if not cls.conditioned)
 
 
 @pytest.fixture(scope="module")

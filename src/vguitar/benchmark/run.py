@@ -121,7 +121,10 @@ def run_benchmark(
     # Reference: THD of the actual circuit output on the test tone region.
     ref_thd = metrics.thd(lambda _x: test.y[: len(_x)], sr=test.sr) if len(test) else float("nan")
 
-    names = model_names or sorted(all_models())
+    # Conditioned models (CIRCE) need a control dataset; skip them in the
+    # unconditioned benchmark unless explicitly requested.
+    registry = all_models()
+    names = model_names or sorted(n for n, cls in registry.items() if not cls.conditioned)
     rows: list[dict[str, Any]] = []
     for name in names:
         console.print(f"  training [cyan]{name}[/] ...")
