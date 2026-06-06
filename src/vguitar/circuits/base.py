@@ -21,7 +21,7 @@ the runner adds those.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 
 
 class Circuit(ABC):
@@ -42,8 +42,10 @@ class Circuit(ABC):
 # --- registry -------------------------------------------------------------
 _REGISTRY: dict[str, type[Circuit]] = {}
 
+_CircuitT = TypeVar("_CircuitT", bound="Circuit")
 
-def register_circuit(cls: type[Circuit]) -> type[Circuit]:
+
+def register_circuit(cls: type[_CircuitT]) -> type[_CircuitT]:
     """Class decorator: register a Circuit under its ``name``."""
     key = cls.name.lower()
     if key in _REGISTRY:

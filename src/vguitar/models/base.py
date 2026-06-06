@@ -20,7 +20,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 import numpy as np
 
@@ -119,9 +119,11 @@ def check_streaming(
 # --- registry -------------------------------------------------------------
 _REGISTRY: dict[str, type[Model]] = {}
 
+_ModelT = TypeVar("_ModelT", bound="Model")
 
-def register_model(cls: type[Model]) -> type[Model]:
-    """Class decorator: register a Model under its ``name``."""
+
+def register_model(cls: type[_ModelT]) -> type[_ModelT]:
+    """Class decorator: register a Model under its ``name`` (identity-preserving)."""
     key = cls.name.lower()
     if key in _REGISTRY:
         raise ValueError(f"duplicate model name: {cls.name!r}")
