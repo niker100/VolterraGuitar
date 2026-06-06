@@ -7,10 +7,13 @@ __pycache__/
 .ruff_cache/
 .ty_cache/
 
-# --- Project artifacts ---
-data/            # generated SPICE datasets (large; reproducible from code)
-outputs/         # plots, audio renders
-runs/            # training runs / checkpoints
+# --- Project artifacts (comments on their own line: gitignore has no inline comments) ---
+# generated SPICE datasets (large; reproducible from code)
+data/
+# plots, audio renders
+outputs/
+# training runs / checkpoints
+runs/
 *.pth
 *.ckpt
 *.onnx
