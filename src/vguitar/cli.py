@@ -456,6 +456,20 @@ def cmd_plots(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def cmd_circe(args: argparse.Namespace, cfg: Config) -> int:
+    """Train/validate the conditioned CIRCE model on a drive knob; emit figures."""
+    try:
+        from vguitar.benchmark.circe_eval import run_circe_eval
+    except ImportError as exc:
+        return _fail(f"circe eval unavailable: {exc}")
+    try:
+        run_circe_eval(args.circuit, retrain=args.retrain, regen=args.regen,
+                       eval_di=args.di, render=args.render, heatmap=args.heatmap)
+    except (KeyError, RuntimeError, FileNotFoundError) as exc:
+        return _fail(str(exc))
+    return 0
+
+
 # --- argument parser ------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse tree (one subparser per subcommand)."""
@@ -502,6 +516,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--circuit", required=True, help="circuit name")
     sp.add_argument("--models", default=None, help="comma-separated model names (default: all trained)")
     sp.set_defaults(func=cmd_plots)
+
+    sp = sub.add_parser("circe", help="train + validate the conditioned CIRCE model; emit figures")
+    sp.add_argument("--circuit", default="bjt", help="circuit name")
+    sp.add_argument("--retrain", action="store_true", help="retrain even if a saved model exists")
+    sp.add_argument("--regen", action="store_true", help="re-simulate the drive-sweep datasets")
+    sp.add_argument("--no-di", dest="di", action="store_false", help="skip held-out guitar-DI eval")
+    sp.add_argument("--no-render", dest="render", action="store_false", help="skip A/B wav renders")
+    sp.add_argument("--no-heatmap", dest="heatmap", action="store_false", help="skip drive-freq heatmap")
+    sp.set_defaults(func=cmd_circe)
 
     return p
 
