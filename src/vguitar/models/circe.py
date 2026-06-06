@@ -16,9 +16,9 @@ output stays bounded across the whole control + amplitude range.
 * **Interpolation**: gamma is centred at 1 and the conditioner is zero-init
   (untrained == identity), controls are normalized; FiLM's affine form
   interpolates smoothly between trained settings.
-* **Stability**: gamma is bounded (``1 + tanh``) and the output passes through
-  ``A*tanh(y/A)`` (``A`` ~ 1.2x the trained output range), so it saturates
-  rather than diverging outside the trained range.
+* **Stability**: gamma is bounded (``1 + tanh``) and the output is hard-limited
+  to +-A (``A`` ~ 1.2x the trained output range) -- linear within range (so the
+  network's own clipping is preserved), bounded only on extrapolation.
 
 ``process``/``process_block`` take an optional control vector ``c``; with
 ``c=None`` they use the (normalized) zero control, so :func:`check_streaming`
@@ -106,8 +106,11 @@ class _CIRCENet(nn.Module):
             h, s = layer(h)
             skip = skip + s
         y = self.out(skip).squeeze(1)  # (B, T)
-        a = self.out_bound
-        return a * torch.tanh(y / a)  # saturator of last resort
+        # Saturator of last resort: LINEAR within the trained range (so the
+        # network's own hard clipping is preserved), hard-limited only beyond
+        # +-out_bound (~1.2x the trained peak) for stability on extrapolation.
+        a = float(self.out_bound)
+        return torch.clamp(y, -a, a)
 
 
 @register_model
@@ -340,7 +343,7 @@ class CIRCE(Model):
         o = np.maximum(s["o1w"] @ o + s["o1b"][:, None], 0.0)
         o = s["o3w"] @ o + s["o3b"][:, None]
         a = s["out_bound"]
-        return (a * np.tanh(o[0] / a)).astype(np.float32)
+        return np.clip(o[0], -a, a).astype(np.float32)
 
     # --- persistence ------------------------------------------------------
     def save(self, path: str | Path) -> None:
