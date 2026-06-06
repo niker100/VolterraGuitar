@@ -270,3 +270,24 @@ ngspice parallelism**.
 
 (Generated 2026-06-06 by the `conditioned-sota-design` workflow: 6 research angles, 4 candidates,
 16 critiques, converge → red-team → revise.)
+
+---
+
+## Progress log (milestone execution)
+
+- **GATE-0 — backbone — PASS, with a pivot.** Bake-off on the BJT: a **small TCN**
+  (channels=8, n_blocks=2, n_layers=7; 7.7k params) hit **ESR 0.194** — better than the big
+  TCN (0.236) and all classical (WH 0.557). The **SSM is dropped** (worse accuracy 1.075 *and*
+  its chunked-FFT scan is impractically slow to train — stalled twice). **CIRCE backbone = small
+  TCN.** The conditioning/stability/data layers below are backbone-agnostic and carry over.
+- **GATE-1 — real-time kernel — PASS.** Replaced the TCN streaming path with **cached incremental
+  dilated convolution** (Fast-WaveNet: per-layer ring buffer of `(kernel-1)*dilation` inputs;
+  weights baked to numpy from `state_dict`). Streaming == offline to **3e-8**; **RTF 0.6× → ~8×**
+  (small) / 1.8× (big) at block 128 in **pure numpy** — Numba/C++ not needed yet, leaving ample
+  headroom for inline FiLM. (Implemented in `models/tcn.py`.)
+- **Data substrate — IN PLACE.** `Dataset` extended with `controls (N,C)` + `control_names` /
+  `control_kinds` + `from_segments`, backward-compatible (`data.py`), tested.
+- **NEXT — GATE-2 (the pivotal cheap experiment):** generate a one-knob (drive) conditioned BJT
+  dataset (grid + held-out off-grid), add `process_block(x, c)` + a concat-conditioned TCN
+  baseline, and test interpolation to unseen drive settings. If a plain baseline already
+  interpolates, the FiLM/Lipschitz machinery may be unnecessary; if it can't, it's a data problem.
