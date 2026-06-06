@@ -18,6 +18,7 @@ Two processing paths, deliberately:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
@@ -115,6 +116,67 @@ def check_streaming(
     if not np.isfinite(err) or err > atol:
         raise AssertionError(
             f"{model.name}: streaming mismatch (max abs err {err:.2e} > {atol:.0e})"
+        )
+    return err
+
+
+def check_streaming_moving(
+    model: Any,
+    control_traj: np.ndarray | Callable[[int], np.ndarray] | None = None,
+    n: int = 8192,
+    block: int = 128,
+    seed: int = 0,
+    atol: float = 2e-3,
+) -> float:
+    """Assert conditioned streaming is correct under a MOVING control (GATE-4).
+
+    ``check_streaming`` only exercises a constant/default control. Here the
+    control changes per block (a knob being turned), and we verify the output is
+    **invariant to block size**: streaming at ``block`` must equal streaming
+    sample-by-sample (``block=1``) given the *same* per-block control schedule.
+    Because the conv state-carry is exact and FiLM is piecewise-constant per
+    block, the two agree to floating-point tolerance — proving the live engine
+    can re-block freely and move the knob mid-stream without artifacts.
+
+    Args:
+        model: a conditioned model whose ``process_block(x, c)`` accepts a control.
+        control_traj: ``(n_blocks, K)`` per-block control, or a
+            ``callable(block_index) -> c``; ``None`` uses a smooth 0->1 ramp
+            across the model's ``n_control`` controls.
+        n, block, seed, atol: signal length, block size, RNG seed, tolerance.
+
+    Returns:
+        Max abs difference between the block and per-sample streamed outputs.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal(n).astype(np.float32) * 0.3
+    n_blocks = (n + block - 1) // block
+    k = int(getattr(model, "n_control", 1))
+    if control_traj is None:
+        ramp = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, n_blocks))  # smooth 0->1
+        traj = np.repeat(ramp[:, None], k, axis=1).astype(np.float32)
+    elif isinstance(control_traj, np.ndarray):
+        traj = np.asarray(control_traj, dtype=np.float32)
+        if traj.ndim == 1:
+            traj = traj[:, None]
+    else:  # callable(block_index) -> control vector
+        traj = np.asarray([np.atleast_1d(control_traj(i)) for i in range(n_blocks)], dtype=np.float32)
+
+    model.reset()
+    y_block = np.concatenate(
+        [
+            np.asarray(model.process_block(x[i * block : (i + 1) * block], traj[i]), dtype=np.float32)
+            for i in range(n_blocks)
+        ]
+    )[:n]
+    model.reset()  # per-sample, but reusing each block's control (so the schedule matches)
+    y_sample = np.concatenate(
+        [np.asarray(model.process_block(x[j : j + 1], traj[j // block]), dtype=np.float32) for j in range(n)]
+    )[:n]
+    err = float(np.max(np.abs(y_block - y_sample))) if n else float("inf")
+    if not np.isfinite(err) or err > atol:
+        raise AssertionError(
+            f"{model.name}: moving-control streaming mismatch (max abs err {err:.2e} > {atol:.0e})"
         )
     return err
 
