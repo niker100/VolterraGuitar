@@ -288,3 +288,120 @@ def fig_control_response(control_vals: np.ndarray, circuit_y: np.ndarray, model_
     ax.legend(fontsize=8)
     fig.tight_layout()
     return fig
+
+
+def fig_esr_by_control(control_vals: np.ndarray, esr_vals: np.ndarray, *,
+                       held_mask: np.ndarray | None = None, control_name: str = "drive",
+                       name: str = "") -> Figure:
+    """Per-setting test ESR; trained settings filled, held-out (interpolated) hatched."""
+    cv = np.asarray(control_vals, dtype=np.float64)
+    order = np.argsort(cv)
+    cv, ev = cv[order], np.asarray(esr_vals, dtype=np.float64)[order]
+    held = np.zeros(len(cv), bool) if held_mask is None else np.asarray(held_mask, bool)[order]
+    col = color_for("circe")
+    fig, ax = plt.subplots(figsize=(7.2, 3.6))
+    bars = ax.bar(np.arange(len(cv)), ev, color=col)
+    for i, h in enumerate(held):
+        if h:
+            bars[i].set_facecolor("white")
+            bars[i].set_edgecolor(col)
+            bars[i].set_linewidth(1.6)
+            bars[i].set_hatch("//")
+    ax.set_xticks(np.arange(len(cv)), [f"{v:g}" for v in cv])
+    ax.set(xlabel=control_name, ylabel="test ESR", title=f"{name} ESR by {control_name} (hatched = held-out)")
+    fig.tight_layout()
+    return fig
+
+
+def fig_knob_harmonics(drives: list[float], circ: list[np.ndarray], model: list[np.ndarray],
+                       held: list[bool], sr: int, f0: float = 1000.0, name: str = "") -> Figure:
+    """Harmonic stack at several drive settings: circuit (black) vs CIRCE (colour)."""
+    n = len(drives)
+    fig, axes = plt.subplots(1, n, figsize=(3.3 * n, 3.1), sharey=True, constrained_layout=True)
+    axes = np.atleast_1d(axes)
+    ks = np.arange(1, 9)
+    for a, g, yc, ym, h in zip(axes, drives, circ, model, held, strict=True):
+        a.plot(ks, _harmonic_levels(yc, sr, f0, 8), "o-", color="k", ms=4, lw=1.6, label="circuit")
+        a.plot(ks, _harmonic_levels(ym, sr, f0, 8), "o-", color=color_for("circe"), ms=3, lw=1.1,
+               label="CIRCE")
+        a.set(title=f"drive={g * 1000:.0f} mV{' (held-out)' if h else ''}", xlabel="harmonic",
+              ylim=(-80, 5), xticks=ks)
+    axes[0].set_ylabel("level rel. fund. (dB)")
+    axes[0].legend(fontsize=8)
+    fig.suptitle(f"{name} harmonic stack across the drive knob", fontsize=10)
+    return fig
+
+
+def fig_knob_waveforms(drives: list[float], circ: list[np.ndarray], model: list[np.ndarray],
+                       held: list[bool], sr: int, n: int = 400, name: str = "") -> Figure:
+    """Output waveform at several drive settings: circuit (black) vs CIRCE (colour)."""
+    npan = len(drives)
+    fig, axes = plt.subplots(1, npan, figsize=(3.4 * npan, 2.8), constrained_layout=True)
+    axes = np.atleast_1d(axes)
+    for a, g, yc, ym, h in zip(axes, drives, circ, model, held, strict=True):
+        yc = np.asarray(yc, dtype=np.float64)
+        ym = np.asarray(ym, dtype=np.float64)
+        s = max(0, int(np.argmax(np.abs(yc)) - n // 2))
+        sl = slice(s, s + n)
+        t = np.arange(len(yc[sl])) / sr * 1e3
+        a.plot(t, yc[sl], color="k", lw=1.6, label="circuit")
+        a.plot(t, ym[sl], color=color_for("circe"), lw=1.0, label="CIRCE")
+        a.set(title=f"drive={g * 1000:.0f} mV{' (held-out)' if h else ''}", xlabel="time (ms)")
+    axes[0].set_ylabel("output (V)")
+    axes[0].legend(fontsize=8)
+    return fig
+
+
+def fig_training_curve(history: dict[str, list[float]], name: str = "") -> Figure:
+    """Training/validation curves vs epoch (log-y)."""
+    fig, ax = plt.subplots(figsize=(6.4, 3.8))
+    for key, col, lab in (("val_esr", color_for("circe"), "val ESR"),
+                          ("train_loss", OKABE_ITO["gray"], "train loss")):
+        v = history.get(key)
+        if v:
+            ax.plot(range(1, len(v) + 1), v, color=col, label=lab)
+    ax.set(xlabel="epoch", ylabel="loss / ESR", yscale="log", title=f"{name} CIRCE training")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_interp_vs_distance(dist: np.ndarray, esr_vals: np.ndarray, held_mask: np.ndarray,
+                           *, control_name: str = "drive", name: str = "") -> Figure:
+    """ESR vs distance-to-nearest-trained control setting (the interpolation test).
+
+    Trained settings sit at distance 0 (filled); held-out (interpolated) settings
+    are open markers — if their ESR is near the trained level, interpolation holds.
+    """
+    d = np.asarray(dist, dtype=np.float64)
+    ev = np.asarray(esr_vals, dtype=np.float64)
+    held = np.asarray(held_mask, bool)
+    col = color_for("circe")
+    fig, ax = plt.subplots(figsize=(6.4, 4.0))
+    ax.scatter(d[~held], ev[~held], s=45, color=col, label="trained", zorder=3)
+    if held.any():
+        ax.scatter(d[held], ev[held], s=80, facecolor="white", edgecolor=col, linewidth=1.6,
+                   label="held-out (interpolated)", zorder=4)
+    ax.set(xlabel=f"distance to nearest trained {control_name} (normalized)", ylabel="ESR",
+           yscale="log", title=f"{name} ESR vs control distance")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_drive_freq_error(drives: np.ndarray, freqs: np.ndarray, err_db: np.ndarray,
+                         *, control_name: str = "drive", name: str = "") -> Figure:
+    """Heatmap of CIRCE-vs-circuit spectral error (dB) across control x frequency."""
+    dv = np.asarray(drives, dtype=np.float64)
+    fv = np.asarray(freqs, dtype=np.float64)
+    err = np.asarray(err_db, dtype=np.float64)  # (n_drives, n_freqs)
+    fig, ax = plt.subplots(figsize=(7.4, 4.2))
+    im = ax.imshow(err, aspect="auto", origin="lower", cmap=CMAP_SPEC,
+                   extent=(float(fv[0]), float(fv[-1]), 0.0, float(len(dv))))
+    ax.set_yticks(np.arange(len(dv)) + 0.5, [f"{d * 1000:.0f}" for d in dv])
+    ax.set(xlabel="frequency (Hz)", ylabel=f"{control_name} (mV)",
+           title=f"{name} |CIRCE - circuit| magnitude error (dB)")
+    ax.grid(False)
+    fig.colorbar(im, ax=ax, label="error (dB)")
+    fig.tight_layout()
+    return fig
