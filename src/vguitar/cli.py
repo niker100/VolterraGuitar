@@ -22,6 +22,7 @@ Subcommands: ``list``, ``gen``, ``train``, ``bench``, ``live``, ``selftest``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -346,6 +347,115 @@ def cmd_selftest(args: argparse.Namespace, cfg: Config) -> int:
     return 0 if all_ok else 1
 
 
+# --- plots ----------------------------------------------------------------
+def _find_model_file(cfg: Config, circuit: str, model: str) -> Path | None:
+    """Locate a trained model file, tolerating both naming conventions."""
+    for cand in (cfg.paths.runs / f"{circuit}.{model}.model", cfg.paths.runs / f"{circuit}_{model}"):
+        if cand.exists():
+            return cand
+    return None
+
+
+def _read_bench_csv(cfg: Config, circuit: str) -> list[dict]:
+    """Parse a saved benchmark CSV into leaderboard rows (for the plot)."""
+    import csv
+
+    path = cfg.paths.outputs / f"{circuit}_benchmark.csv"
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with open(path, newline="") as f:
+        for r in csv.DictReader(f):
+            if r.get("error"):
+                rows.append({"model": r["model"], "error": r["error"]})
+                continue
+            with contextlib.suppress(KeyError, ValueError):
+                rows.append({
+                    "model": r["model"], "esr": float(r["esr"]), "rtf": float(r["rtf"]),
+                    "realtime": r["realtime"] == "True", "params": int(r["params"]),
+                })
+    return rows
+
+
+def cmd_plots(args: argparse.Namespace, cfg: Config) -> int:
+    """Render the clean diagnostic figure set for a circuit to outputs/figs/."""
+    from vguitar import plotting as plot
+    from vguitar.circuits import get_circuit
+    from vguitar.models import all_models, get_model
+
+    try:
+        ds = _load_or_make_dataset(cfg, args.circuit, make=False)
+    except FileNotFoundError as exc:
+        return _fail(str(exc))
+
+    names = [m.strip() for m in args.models.split(",")] if args.models else sorted(all_models())
+    models = {}
+    for name in names:
+        path = _find_model_file(cfg, args.circuit, name)
+        if path is None:
+            print(f"  (skip {name}: no trained model in {cfg.paths.runs})")
+            continue
+        try:
+            models[name] = get_model(name).load(path)
+        except Exception as exc:  # a stale/incompatible checkpoint shouldn't abort
+            print(f"  (skip {name}: load failed: {exc})")
+
+    outdir = cfg.paths.outputs / "figs"
+    outdir.mkdir(parents=True, exist_ok=True)
+    sr = ds.sr
+    saved: list[str] = []
+
+    def _save(fig, stem: str) -> None:
+        import matplotlib.pyplot as plt
+
+        p = outdir / f"{args.circuit}_{stem}.png"
+        fig.savefig(p)
+        plt.close(fig)
+        saved.append(str(p))
+
+    _save(plot.fig_dataset(ds.x, ds.y, sr, name=args.circuit), "dataset")
+
+    _, _, test = ds.split(cfg.train.val_fraction, cfg.train.test_fraction)
+    if models:
+        preds = {n: m.process(test.x) for n, m in models.items()}
+        _save(plot.fig_waveform(test.y, preds, sr, name=args.circuit), "waveform")
+
+    # Probes through the real circuit (needs ngspice) for transfer + harmonics.
+    try:
+        from vguitar.spice.runner import simulate
+
+        circ = get_circuit(args.circuit)
+        amp = float(np.max(np.abs(ds.x)))  # probe within the trained amplitude range
+        x_slow = (amp * np.sin(2 * np.pi * 40 * np.arange(int(0.05 * sr)) / sr)).astype(np.float32)
+        y_slow = simulate(circ, x_slow, sr)
+        _save(
+            plot.fig_transfer(x_slow, y_slow, {n: m.process(x_slow) for n, m in models.items()},
+                              name=args.circuit), "transfer")
+        x_tone = (circ.nominal_drive_v * np.sin(2 * np.pi * 1000 * np.arange(int(0.2 * sr)) / sr)
+                  ).astype(np.float32)
+        y_tone = simulate(circ, x_tone, sr)
+        _save(
+            plot.fig_harmonics(y_tone, {n: m.process(x_tone) for n, m in models.items()}, sr,
+                               f0=1000.0, name=args.circuit), "harmonics")
+    except Exception as exc:  # ngspice missing / sim error: skip these two
+        print(f"  (skip transfer/harmonics: {exc})")
+
+    from vguitar.models.volterra_reg import VolterraReg
+
+    vm = models.get("volterra")
+    if isinstance(vm, VolterraReg) and vm.h1 is not None:
+        _save(plot.fig_volterra_kernels(vm.h1, vm._H2, vm._H3, sr), "kernels")
+
+    rows = _read_bench_csv(cfg, args.circuit)
+    if rows:
+        _save(plot.fig_leaderboard(rows, name=args.circuit), "leaderboard")
+
+    print(f"wrote {len(saved)} figures to {outdir}:")
+    for s in saved:
+        print(f"  {s}")
+    return 0
+
+
 # --- argument parser ------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse tree (one subparser per subcommand)."""
@@ -387,6 +497,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("selftest", help="smoke-test every model and the ngspice path")
     sp.set_defaults(func=cmd_selftest)
+
+    sp = sub.add_parser("plots", help="render the clean diagnostic figure set to outputs/figs/")
+    sp.add_argument("--circuit", required=True, help="circuit name")
+    sp.add_argument("--models", default=None, help="comma-separated model names (default: all trained)")
+    sp.set_defaults(func=cmd_plots)
 
     return p
 

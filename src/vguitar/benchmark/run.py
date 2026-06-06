@@ -129,7 +129,7 @@ def run_benchmark(
             model = _instantiate(name, cfg.train.device)
             row = _evaluate(name, model, train, val, test, cfg)
             with _suppress():
-                model.save(cfg.paths.runs / f"{circuit_name}_{name}")
+                model.save(cfg.paths.runs / f"{circuit_name}.{name}.model")
             with _suppress():
                 metrics.plot_compare(
                     test.y,
