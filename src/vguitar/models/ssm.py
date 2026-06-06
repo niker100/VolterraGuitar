@@ -61,6 +61,8 @@ class _S4DLayer(nn.Module):
     ``B``/``C`` (per-channel input/output gains), real ``D`` (skip).
     """
 
+    _MAX_CHUNK: int = 2048  # FFT-scan chunk length (bounds memory; state carried)
+
     def __init__(self, d_model: int, d_state: int) -> None:
         super().__init__()
         self.d_model = d_model
@@ -98,31 +100,61 @@ class _S4DLayer(nn.Module):
         return a_bar, b, c
 
     def _ssm(self, u: torch.Tensor, h0: torch.Tensor | None) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run the diagonal recurrence over time.
+        """Run the diagonal recurrence over time via a chunked FFT convolution.
+
+        The recurrence ``h_t = A h_{t-1} + B u_t``, ``y_t = 2 Re(C h_t) + D u_t``
+        is computed in parallel over time using the closed form
+        ``h_t = A^{t+1} h_0 + sum_{s<=t} A^{t-s} B u_s`` -- a causal convolution of
+        the per-mode drive with the geometric kernel ``A^k`` (done by FFT). Long
+        sequences are split into ``_MAX_CHUNK`` chunks with state carried across
+        them, so this is far faster than a Python per-sample scan yet still
+        *exactly* the recurrence: offline ``process`` and block-streaming agree.
 
         Args:
             u: input, shape ``(B, T, d_model)``.
             h0: optional initial complex state ``(B, d_model, d_state)``; ``None``
-                means zeros (used offline and by :meth:`process`).
+                means zeros (offline / :meth:`process`).
 
         Returns:
-            ``(y, h_last)`` where ``y`` is real ``(B, T, d_model)`` and
-            ``h_last`` is the complex state after the last step.
+            ``(y, h_last)``: real ``(B, T, d_model)`` output and the complex state
+            after the last step.
         """
         bsz, t_len, _ = u.shape
-        a_bar, b, c = self._discrete()  # (d_model, d_state)
-        bu = u.unsqueeze(-1).to(b.dtype) * b  # (B, T, d_model, d_state): per-step input drive
+        a_bar, b, c = self._discrete()  # (d_model, d_state), complex
         h = (
             torch.zeros(bsz, self.d_model, self.d_state, dtype=a_bar.dtype, device=u.device)
             if h0 is None
             else h0
         )
-        outs = torch.empty(bsz, t_len, self.d_model, dtype=u.dtype, device=u.device)
-        for t in range(t_len):  # sequential scan: identical offline and streaming
-            h = a_bar * h + bu[:, t]  # h_{t} = A h_{t-1} + B u_t
-            outs[:, t] = 2.0 * (c * h).sum(-1).real  # y_t = 2 Re(C h_t)
-        outs = outs + u * self.d  # real skip D*u
-        return outs, h
+        if t_len == 0:
+            return u.new_zeros(bsz, 0, self.d_model), h
+        outs: list[torch.Tensor] = []
+        for start in range(0, t_len, self._MAX_CHUNK):
+            yc, h = self._ssm_chunk(u[:, start : start + self._MAX_CHUNK], h, a_bar, b, c)
+            outs.append(yc)
+        return torch.cat(outs, dim=1) + u * self.d, h  # real skip D*u
+
+    def _ssm_chunk(
+        self,
+        u: torch.Tensor,
+        h0: torch.Tensor,
+        a_bar: torch.Tensor,
+        b: torch.Tensor,
+        c: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """One chunk of the diagonal recurrence by FFT; returns ``(y, h_last)``."""
+        lc = u.shape[1]
+        k = torch.arange(lc, device=u.device, dtype=torch.float32)
+        a_pows = a_bar.unsqueeze(-1) ** k  # (d_model, d_state, lc) = A^k
+        v = (u.unsqueeze(-1).to(b.dtype) * b).permute(0, 2, 3, 1)  # (B, d_model, d_state, lc)
+        nfft = 1 << ((2 * lc - 1).bit_length())  # power of two >= 2*lc (linear conv)
+        conv = torch.fft.ifft(
+            torch.fft.fft(v, n=nfft, dim=-1) * torch.fft.fft(a_pows, n=nfft, dim=-1), dim=-1
+        )[..., :lc]  # sum_{s<=t} A^{t-s} B u_s
+        state = h0.unsqueeze(-1) * (a_pows * a_bar.unsqueeze(-1)).unsqueeze(0)  # A^{t+1} h0
+        h_all = conv + state  # (B, d_model, d_state, lc)
+        y = 2.0 * (c.unsqueeze(0).unsqueeze(-1) * h_all).real.sum(2)  # (B, d_model, lc)
+        return y.permute(0, 2, 1), h_all[..., -1]
 
     def forward(
         self, x: torch.Tensor, h0: torch.Tensor | None = None
@@ -142,6 +174,10 @@ class _SSMNet(nn.Module):
         self.in_proj = nn.Linear(1, d_model)
         self.layers = nn.ModuleList(_S4DLayer(d_model, d_state) for _ in range(n_layers))
         self.out_proj = nn.Linear(d_model, 1)
+        # Zero-init the readout so the untrained net outputs ~0 (ESR starts ~1,
+        # not amplifying). Standard for residual stacks; training grows it.
+        nn.init.zeros_(self.out_proj.weight)
+        nn.init.zeros_(self.out_proj.bias)
 
     def forward(
         self, x: torch.Tensor, states: list[torch.Tensor | None] | None = None
@@ -204,17 +240,23 @@ class SSM(Model):
         best_state = {k: v.detach().clone() for k, v in self.net.state_dict().items()}
         seq_len = min(cfg.seq_len, len(train))
         warmup = min(cfg.warmup, seq_len - 1)
+        # Multiple gradient steps per epoch (~one pass over the data). Without
+        # this an "epoch" is a single batch, so the model is starved of updates.
+        steps_per_epoch = max(1, (len(train) - seq_len) // seq_len)
 
         for _ in range(cfg.epochs):
             self.net.train()
-            xb, yb = self._sample_batch(xt, yt, seq_len, cfg.batch_size, gen)
-            opt.zero_grad()
-            pred, _ = self.net(xb)
-            loss = combined_loss(pred[:, warmup:], yb[:, warmup:], stft_weight=0.1, dc_weight=0.1)
-            loss.backward()
-            nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)  # tame the scan's gradients
-            opt.step()
-            history["train_loss"].append(float(loss.detach()))
+            ep_loss = 0.0
+            for _ in range(steps_per_epoch):
+                xb, yb = self._sample_batch(xt, yt, seq_len, cfg.batch_size, gen)
+                opt.zero_grad()
+                pred, _ = self.net(xb)
+                loss = combined_loss(pred[:, warmup:], yb[:, warmup:], stft_weight=0.1, dc_weight=0.1)
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1.0)  # tame scan gradients
+                opt.step()
+                ep_loss += float(loss.detach())
+            history["train_loss"].append(ep_loss / steps_per_epoch)
 
             vloss = self._val_loss(val_xy, warmup)
             history["val_loss"].append(vloss)
