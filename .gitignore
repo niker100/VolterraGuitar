@@ -1,0 +1,28 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.ty_cache/
+
+# --- Project artifacts ---
+data/            # generated SPICE datasets (large; reproducible from code)
+outputs/         # plots, audio renders
+runs/            # training runs / checkpoints
+*.pth
+*.ckpt
+*.onnx
+
+# --- v1 / Micro-Cap generated junk (kept circuit*.cir as reference) ---
+*.inx*
+*.TNO
+*.ANO
+*.DANO
+*.DDNO
+*.CSV
+*.bak_cir
+stored.pckl
+volterra_nn_model.h5
+*.h5

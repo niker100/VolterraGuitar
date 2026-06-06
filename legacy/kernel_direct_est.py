@@ -1,16 +1,17 @@
 import numpy as np
 import tensorflow as tf
+from tensorflow.keras.layers import Concatenate, Dense, Input, Lambda
 from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Input, Dense, Lambda, Concatenate
 from tensorflow.keras.optimizers import Adam
+
 
 # Load simulation data
 def load_simulation_data(file_path):
-    with open(file_path, 'r') as file:
-        data = file.read().strip().split('\n\n')
+    with open(file_path) as file:
+        data = file.read().strip().split("\n\n")
     time, input_signal, output_signal = [], [], []
     for block in data:
-        lines = block.strip().split('\n')
+        lines = block.strip().split("\n")
         t, input_sig, output_sig = [], [], []
         for line in lines:
             values = line.split()
@@ -22,11 +23,12 @@ def load_simulation_data(file_path):
         output_signal.append(np.array(output_sig))
     return time, input_signal, output_signal
 
+
 # Define Volterra-inspired neural network
 def volterra_layer(inputs, order=2):
     """Creates a Volterra-inspired layer for non-linear interactions."""
     linear_output = Dense(1, activation=None, name="linear")(inputs)
-    
+
     # Create polynomial terms for Volterra kernel representation
     if order > 1:
         nonlinear_terms = []
@@ -55,15 +57,16 @@ if __name__ == "__main__":
     model.compile(optimizer=Adam(learning_rate=0.001), loss="mse", metrics=["mae"])
 
     # Model summary
-    #model.summary()
+    # model.summary()
 
     # Train the model
     history = model.fit(
-        X_train, y_train,
+        X_train,
+        y_train,
         validation_split=0.2,  # Use 20% of the data for validation
-        epochs=1,             # Number of epochs
-        batch_size=4096,         # Batch size
-        verbose=1              # Show training progress
+        epochs=1,  # Number of epochs
+        batch_size=4096,  # Batch size
+        verbose=1,  # Show training progress
     )
 
     # Save the model
@@ -74,7 +77,11 @@ if __name__ == "__main__":
     print(f"Test Loss: {test_loss}, Test MAE: {test_mae}")
 
     # Extract Volterra kernels (trained weights)
-    volterra_weights = {layer.name: layer.get_weights() for layer in model.layers if "linear" in layer.name or "nonlinear" in layer.name}
+    volterra_weights = {
+        layer.name: layer.get_weights()
+        for layer in model.layers
+        if "linear" in layer.name or "nonlinear" in layer.name
+    }
     print("Trained Volterra Kernels:")
     for name, weights in volterra_weights.items():
         print(f"{name}: {weights}")
