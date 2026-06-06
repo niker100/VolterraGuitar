@@ -299,6 +299,16 @@ ngspice parallelism**.
   circuit across low/mid drive; **residual limitation**: under-captures the most extreme hard-clip
   (THD 0.38 vs 0.65 at 160 mV) — a small-model/edge-rounding shortfall (more capacity/training, or
   ADAA per GATE-5, would help). Figures: `outputs/figs/bjt_circe_{thd,waveform}.png`.
+- **VALIDATION SUITE (`vguitar circe`, `benchmark/circe_eval.py`).** Reproducible report + figures:
+  interpolation **worst-case 0.093 / p95 0.093** (trained 0.076, held-out mean 0.088 — tight);
+  **moving-control streaming equivalence 1.7e-6** (GATE-4: knob turning mid-stream is exact);
+  **moving-knob RTF 7.7×** (vs 7.8× constant — conditioning ~free); hot-input **saturates** at the
+  bound (clamp works). Held-out **real guitar-DI**: ESR 0.06–0.17 (weak at 10 mV = 0.30). Figures:
+  ESR-by-drive, THD/peak/interp-vs-distance curves, knob harmonics/waveforms, training curve,
+  drive×freq error heatmap, held-out-DI compares; plus A/B wav renders in `outputs/audio/`. Tests in
+  `tests/test_circe_eval.py`. **Surfaced flaw:** zero-input is not silent at high drive (−6 dBFS at
+  160 mV) — a drive-dependent DC offset (the real circuit is AC-coupled); cheap fix = a fixed output
+  DC-blocker (1-pole high-pass), deferred.
 - **REMAINING (future):** GATE-4 (moving-control stability tests, dwell/slew), GATE-5 (ADAA +
   alias-free fine-tune for the hard-clip extreme), GATE-6 (multi-stage + multi-control + active
   learning, nonlinear-feedback gap). The core conditioned/interactive emulator is proven; these

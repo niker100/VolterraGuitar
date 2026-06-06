@@ -336,7 +336,9 @@ class CIRCE(Model):
             conv = cb[:, None] + sum(cw[:, :, t] @ ctx[:, t * d : t * d + nb] for t in range(k))
             if k > 1:
                 s["buf"][i] = ctx[:, -(k - 1) * d :].copy()
-            g = np.tanh(conv[:ch]) * (1.0 / (1.0 + np.exp(-conv[ch:])))
+            # gated activation; clip the sigmoid arg to avoid exp overflow on
+            # out-of-range (hot) inputs (no effect in-range — sigmoid is saturated).
+            g = np.tanh(conv[:ch]) * (1.0 / (1.0 + np.exp(-np.clip(conv[ch:], -30.0, 30.0))))
             h = h + (rw @ g + rb[:, None])
             skip += sw @ g + sb[:, None]
         o = np.maximum(skip, 0.0)

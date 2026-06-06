@@ -293,7 +293,9 @@ class TCN(Model):
             conv = cb[:, None] + sum(cw[:, :, t] @ ctx[:, t * d : t * d + nb] for t in range(k))
             if k > 1:
                 s["buf"][i] = ctx[:, -(k - 1) * d :].copy()
-            g = np.tanh(conv[:c]) * (1.0 / (1.0 + np.exp(-conv[c:])))  # gated activation
+            # gated activation; clip the sigmoid arg to avoid exp overflow on
+            # out-of-range inputs (no effect in-range — sigmoid is saturated there).
+            g = np.tanh(conv[:c]) * (1.0 / (1.0 + np.exp(-np.clip(conv[c:], -30.0, 30.0))))
             h = h + (rw @ g + rb[:, None])  # residual
             skip += sw @ g + sb[:, None]
         o = np.maximum(skip, 0.0)
