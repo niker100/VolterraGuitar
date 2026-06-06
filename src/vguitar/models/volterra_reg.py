@@ -44,7 +44,7 @@ and real-time evaluation stay tractable on CPU.
 
 from __future__ import annotations
 
-from itertools import combinations_with_replacement
+from itertools import combinations_with_replacement, permutations
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -101,6 +101,12 @@ class VolterraReg(Model):
         self._idx2 = _triangular_indices(self.mem2, 2)  # (n_pairs, 2)
         self._idx3 = _triangular_indices(self.mem3, 3)  # (n_triples, 3)
 
+        # Dense, fully-symmetric kernels for FAST evaluation (built by
+        # _assemble_dense after fit/load): h2 -> (mem2, mem2), h3 -> (mem3,)*3.
+        # Inference is then BLAS quadratic/cubic forms, not a Python term loop.
+        self._H2: np.ndarray | None = None
+        self._H3: np.ndarray | None = None
+
         # Streaming state: input ring buffer of length = longest memory.
         self._maxmem = max(self.mem1, self.mem2, self.mem3)
         self._buf = np.zeros(self._maxmem - 1, dtype=np.float64)
@@ -153,6 +159,7 @@ class VolterraReg(Model):
         if self.max_order >= 3:
             self.h3 = theta[off : off + sizes[2]].copy()
             off += sizes[2]
+        self._assemble_dense()  # build dense symmetric kernels for fast inference
 
         resid = phi @ theta - y
         train_mse = float(np.mean(resid**2))
@@ -168,26 +175,10 @@ class VolterraReg(Model):
 
     # --- offline inference ------------------------------------------------
     def process(self, x: np.ndarray) -> np.ndarray:
-        """Process a whole signal; same length as ``x``, float32.
-
-        Order 1 is an FIR convolution via :func:`scipy.signal.lfilter`. Orders 2/3
-        sum symmetric lagged products over their (small) supports, vectorized over
-        time using one precomputed lagged-input matrix.
-        """
+        """Process a whole signal; same length as ``x``, float32."""
         if self.h1 is None:
             raise RuntimeError("model is not fitted")
-        xd = np.asarray(x, dtype=np.float64).reshape(-1)
-        n = xd.shape[0]
-        y = np.full(n, self.h0, dtype=np.float64)
-
-        # Linear term: y += conv(h1, x), causal.
-        y += lfilter(self.h1, [1.0], xd)
-
-        if self.max_order >= 2 and self.h2 is not None:
-            y += self._poly_term(xd, self._idx2, self.h2, self.mem2)
-        if self.max_order >= 3 and self.h3 is not None:
-            y += self._poly_term(xd, self._idx3, self.h3, self.mem3)
-        return y.astype(np.float32)
+        return self._process_array(np.asarray(x, dtype=np.float64).reshape(-1)).astype(np.float32)
 
     # --- streaming inference (realtime) -----------------------------------
     def reset(self) -> None:
@@ -243,6 +234,7 @@ class VolterraReg(Model):
             m.h1 = f["h1"].astype(np.float64) if f["h1"].size else None
             m.h2 = f["h2"].astype(np.float64) if f["h2"].size else None
             m.h3 = f["h3"].astype(np.float64) if f["h3"].size else None
+        m._assemble_dense()  # rebuild dense kernels for fast inference
         return m
 
     # --- introspection ----------------------------------------------------
@@ -257,15 +249,62 @@ class VolterraReg(Model):
 
     # --- internals --------------------------------------------------------
     def _process_array(self, xd: np.ndarray) -> np.ndarray:
-        """Float64 forward pass over a raw array (shared by process/process_block)."""
-        y = np.full(xd.shape[0], self.h0, dtype=np.float64)
+        """Float64 forward pass (shared by process/process_block).
+
+        Linear term via :func:`lfilter`; the quadratic and cubic terms are
+        evaluated as dense BLAS contractions against one lagged-input matrix
+        ``X`` (``X[n, i] = x[n-i]``):
+
+        * order 2: ``y2[n] = X H2 Xᵀ`` (a batched quadratic form);
+        * order 3: ``y3[n] = sum_ijk H3[i,j,k] X[n,i] X[n,j] X[n,k]``.
+
+        This is mathematically identical to summing the symmetric kernels term by
+        term, but runs as a handful of vectorized contractions instead of a
+        Python loop over hundreds of coefficients -- the difference between
+        sub-real-time and comfortably real-time.
+        """
         assert self.h1 is not None
+        n = xd.shape[0]
+        y = np.full(n, self.h0, dtype=np.float64)
         y += lfilter(self.h1, [1.0], xd)
-        if self.max_order >= 2 and self.h2 is not None:
-            y += self._poly_term(xd, self._idx2, self.h2, self.mem2)
-        if self.max_order >= 3 and self.h3 is not None:
-            y += self._poly_term(xd, self._idx3, self.h3, self.mem3)
+        if self._H2 is None and self._H3 is None:
+            return y
+        x_lag = _lagged_matrix(xd, self._maxmem)  # (n, maxmem), x_lag[:, i] = x[n-i]
+        if self._H2 is not None:
+            x2 = x_lag[:, : self.mem2]
+            y += np.einsum("ni,ij,nj->n", x2, self._H2, x2, optimize=True)
+        if self._H3 is not None:
+            x3 = x_lag[:, : self.mem3]
+            tmp = np.einsum("ni,nj,ijk->nk", x3, x3, self._H3, optimize=True)
+            y += np.einsum("nk,nk->n", tmp, x3, optimize=True)
         return y
+
+    def _assemble_dense(self) -> None:
+        """Build dense, fully-symmetric kernels from the reduced coefficients.
+
+        The triangular ``h2``/``h3`` store one coefficient per unordered lag
+        tuple; the dense kernels spread each coefficient over that tuple's
+        permutations so the symmetric contraction reproduces the same sum
+        (off-diagonal order-2 entries get ``c/2``; order-3 entries ``c/n_perms``).
+        """
+        self._H2 = None
+        self._H3 = None
+        if self.max_order >= 2 and self.h2 is not None:
+            h2 = np.zeros((self.mem2, self.mem2), dtype=np.float64)
+            for (i, j), c in zip(self._idx2, self.h2, strict=True):
+                if i == j:
+                    h2[i, i] = c
+                else:
+                    h2[i, j] = h2[j, i] = 0.5 * c
+            self._H2 = h2
+        if self.max_order >= 3 and self.h3 is not None:
+            h3 = np.zeros((self.mem3, self.mem3, self.mem3), dtype=np.float64)
+            for (i, j, k), c in zip(self._idx3, self.h3, strict=True):
+                perms = set(permutations((int(i), int(j), int(k))))
+                w = c / len(perms)
+                for p in perms:
+                    h3[p] = w
+            self._H3 = h3
 
     def _design_columns(self, x: np.ndarray) -> tuple[list[np.ndarray], dict[int, int]]:
         """Regression columns (one per free coeff) and per-order column counts."""
@@ -283,19 +322,19 @@ class VolterraReg(Model):
             sizes[2] = len(c3)
         return cols, sizes
 
-    @staticmethod
-    def _poly_term(xd: np.ndarray, idx: np.ndarray, coef: np.ndarray, _mem: int) -> np.ndarray:
-        """Sum a symmetric polynomial kernel over its support, vectorized in time."""
-        out = np.zeros_like(xd)
-        for row, c in zip(idx, coef, strict=True):
-            prod = np.full(xd.shape[0], c, dtype=np.float64)
-            for lag in row:
-                prod *= _shift(xd, int(lag))
-            out += prod
-        return out
-
 
 # --- module-level helpers (pure, testable) --------------------------------
+def _lagged_matrix(x: np.ndarray, mem: int) -> np.ndarray:
+    """Causal lagged-input matrix ``X`` with ``X[n, i] = x[n-i]`` (zeros for n<i).
+
+    Built as a zero-padded sliding window (a view, no large copy), reversed so
+    column ``i`` is lag ``i``. Shape ``(len(x), mem)``.
+    """
+    xp = np.concatenate([np.zeros(mem - 1, dtype=x.dtype), x])
+    win = np.lib.stride_tricks.sliding_window_view(xp, mem)  # (n, mem): xp[n:n+mem]
+    return win[:, ::-1]
+
+
 def _shift(x: np.ndarray, lag: int) -> np.ndarray:
     """Causal shift: ``x[n-lag]`` with zeros for ``n < lag`` (same length)."""
     if lag == 0:
