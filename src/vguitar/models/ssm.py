@@ -240,9 +240,11 @@ class SSM(Model):
         best_state = {k: v.detach().clone() for k, v in self.net.state_dict().items()}
         seq_len = min(cfg.seq_len, len(train))
         warmup = min(cfg.warmup, seq_len - 1)
-        # Multiple gradient steps per epoch (~one pass over the data). Without
-        # this an "epoch" is a single batch, so the model is starved of updates.
-        steps_per_epoch = max(1, (len(train) - seq_len) // seq_len)
+        # Several gradient steps per epoch (random windows). Capped so training
+        # cost stays bounded on large datasets: without the cap, steps scale with
+        # dataset length and a 10 s clip would need thousands of (batched) steps
+        # per epoch -- hours. Each step already sees `batch_size` windows.
+        steps_per_epoch = max(1, min((len(train) - seq_len) // seq_len, 40))
 
         for _ in range(cfg.epochs):
             self.net.train()
