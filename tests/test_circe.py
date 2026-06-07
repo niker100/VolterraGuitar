@@ -74,14 +74,11 @@ def test_save_load_roundtrip(trained: CIRCE, tmp_path) -> None:
 
 
 def test_dcblock_silences_zero_input(trained: CIRCE) -> None:
-    """With the DC-blocker on, zero input is silent even at the hottest control
-    (the drive-dependent DC offset is removed)."""
+    """The fixed DC-blocker (default ~5 Hz) removes any zero-input DC offset, so
+    after its settle the idle output is silent even at the hottest control."""
     assert trained.dcblock_fc > 0.0
-    c = np.array([4.0], np.float32)
-    y = trained.process(np.zeros(SR, np.float32), c)
-    # After the ~1/fc settling transient the output is essentially zero.
-    tail = y[SR // 2 :]
-    assert float(np.sqrt(np.mean(tail**2))) < 1e-3
+    y = trained.process(np.zeros(SR, np.float32), np.array([4.0], np.float32))
+    assert float(np.sqrt(np.mean(y[SR // 2 :] ** 2))) < 1e-3  # steady tail is silent
 
 
 def test_dcblock_streaming_still_exact(trained: CIRCE) -> None:

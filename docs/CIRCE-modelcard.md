@@ -17,7 +17,8 @@ architecture and the milestone log; this card summarizes what ships and how it d
   layer) from a tiny zero-init conditioner (untrained == plain TCN). Controls are
   normalized; γ is bounded `1+tanh` (centred at 1) → smooth interpolation.
 - **Output stage:** a fixed clamp saturator of last resort (`±A`, A≈1.2× trained
-  peak) + a fixed **1-pole ~20 Hz DC-blocker** (the real stages are AC-coupled).
+  peak) + a fixed **1-pole ~5 Hz DC-blocker** (the real stages are AC-coupled;
+  the low corner is transparent across the guitar band and settles sub-audibly).
   Optional **ADAA** hard-clip saturator (`saturator="adaa1"|"adaa2"`) for cleaner
   extreme-drive aliasing (inference-only; training keeps the differentiable clamp).
 - **Streaming:** Fast-WaveNet cached incremental convolution + per-block FiLM, all

@@ -86,7 +86,8 @@ def test_moving_control_per_sample(trained: CIRCE) -> None:
 def test_zero_input_is_quiet(trained: CIRCE) -> None:
     c = np.array([2.0], np.float32)
     driven = _dbfs(trained.process(_seg(2.0, seed=7)[0], c))
-    quiet = _dbfs(trained.process(np.zeros(SR, np.float32), c))
+    # Steady-state tail (drop the DC-blocker's sub-audio settle transient).
+    quiet = _dbfs(trained.process(np.zeros(SR, np.float32), c)[SR // 2 :])
     assert np.isfinite(quiet) and quiet < driven - 20.0  # >=20 dB below a driven signal
 
 

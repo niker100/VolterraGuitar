@@ -180,9 +180,12 @@ def _shootout_one(
             r["thd_circuit"] = ref_thd
         _save(plot.fig_harmonics(tone_circuit, preds_tone, sr, name=circuit_name), "harmonics")
         _save(plot.fig_waveform(test_ds.y, preds_test, sr, name=circuit_name), "waveform")
-        # static transfer: a slow sine that sweeps the clipping range
+        # static transfer: a sine in the guitar band that sweeps the clipping
+        # range. Probed at 90 Hz (a real low note), ABOVE any model's output
+        # DC-blocker corner, so the curve reflects the nonlinearity rather than a
+        # sub-corner high-pass phase shift (a 12 Hz probe opens a spurious loop).
         tprobe = np.arange(int(0.2 * sr)) / sr
-        x_probe = (1.3 * g_nom * np.sin(2 * np.pi * 12.0 * tprobe)).astype(np.float32)
+        x_probe = (1.3 * g_nom * np.sin(2 * np.pi * 90.0 * tprobe)).astype(np.float32)
         y_ref = simulate(circ, x_probe, sr)
         preds_tr = {n: _predict(m, x_probe, g_nom, c) for n, (m, c) in trained.items()}
         _save(plot.fig_transfer(x_probe, y_ref, preds_tr, name=circuit_name), "transfer")

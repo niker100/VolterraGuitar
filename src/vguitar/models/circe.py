@@ -137,7 +137,7 @@ class CIRCE(Model):
         n_layers: int = 7,
         kernel: int = 3,
         cond_hidden: int = 16,
-        dcblock_fc: float = 20.0,
+        dcblock_fc: float = 5.0,
         saturator: str = "clamp",
         device: str = "cpu",
     ) -> None:

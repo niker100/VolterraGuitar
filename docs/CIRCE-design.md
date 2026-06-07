@@ -333,7 +333,9 @@ a concrete deliverable):
 - **M4 — Cross-circuit / multi-model comparison.** `vguitar validate` (`benchmark/
   validate.py`) aggregates CIRCE across circuits → cross-circuit summary + circuit×
   model ESR matrix (optional unconditioned baselines). New house-style builders.
-- **M5 — Output DC-blocker.** Fixed 1-pole ~20 Hz high-pass on the output
+- **M5 — Output DC-blocker.** Fixed 1-pole ~5 Hz high-pass on the output (lowered
+  from 20 Hz after a transfer-curve probe revealed a 20 Hz corner intrudes on the
+  low audio band; 5 Hz is transparent in-band and settles sub-audibly)
   (`clip(DCblock(net), ±A)`): zero-input is now silent (the prior −6 dBFS offset is
   gone) while staying strictly bounded; streaming stays bit-exact (lfilter `zi`).
 - **M6 — DI-mixed training + (mild) capacity bump.** A third of training segments

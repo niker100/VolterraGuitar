@@ -140,9 +140,9 @@ def _stability_checks(model: CIRCE, control_rows: Any, sr: int = 44_100) -> dict
     rows = _as_control_rows(control_rows)
     out_bound = float(model.net.out_bound)
     probe = [rows[0], rows[len(rows) // 2], rows[-1]]
-    # Measure the steady-state tail (drop ~0.1 s) so the output DC-blocker's brief
-    # startup transient doesn't masquerade as idle noise.
-    w = sr // 10
+    # Measure the steady-state tail (drop ~0.3 s) so the output DC-blocker's
+    # startup settle (a low corner settles slowly) doesn't masquerade as idle noise.
+    w = 3 * sr // 10
     zero = [
         {"control": c, "dbfs": _dbfs(model.process(np.zeros(sr, np.float32), c)[w:])} for c in probe
     ]
