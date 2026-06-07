@@ -11,7 +11,7 @@ dependencies = [
     "soxr>=0.5",          # high-quality, fast resampling (sim rate -> audio rate)
     "soundfile>=0.12",    # wav I/O
     "sounddevice>=0.5",   # real-time audio I/O (PortAudio)
-    "torch>=2.4",         # neural models (CPU build is what we want for low-latency RT)
+    "torch>=2.4",         # neural models; CUDA build on Windows (see [tool.uv] below) for GPU training
     "matplotlib>=3.8",    # spectrograms / kernel plots
     "rich>=13.7",         # readable benchmark tables
     "tqdm>=4.66",         # progress bars
@@ -20,6 +20,19 @@ dependencies = [
 
 [project.scripts]
 vguitar = "vguitar.cli:main"
+
+# ---------------------------------------------------------------------------
+# torch: pull the CUDA (cu126) wheel on Windows so neural training can use the
+# GPU (e.g. an RTX 4090). Inference / streaming / RTF still run on CPU (the
+# real-time deployment target). Other platforms fall back to the default index.
+# ---------------------------------------------------------------------------
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu126", marker = "platform_system == 'Windows'" }]
 
 [build-system]
 requires = ["hatchling"]
