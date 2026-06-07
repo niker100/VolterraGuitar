@@ -11,8 +11,9 @@ architecture and the milestone log; this card summarizes what ships and how it d
 ## Architecture
 
 - **Backbone:** dilated gated WaveNet-style TCN (the `_GatedLayer` of
-  `models/tcn.py`); default **12 channels, 2 blocks, 7 layers** (~509-sample
-  receptive field, ~11 ms), **22.7k params**.
+  `models/tcn.py`); default **24 channels, 2 blocks, 8 layers** (~23 ms receptive
+  field), **~89k params** (raised from 12ch/7layers to match the circuits' high
+  harmonics — see "High-frequency accuracy" below).
 - **Conditioning:** per-block **FiLM** (`h ← γ(c)·h + β(c)` before each gated
   layer) from a tiny zero-init conditioner (untrained == plain TCN). Controls are
   normalized; γ is bounded `1+tanh` (centred at 1) → smooth interpolation.
@@ -32,7 +33,35 @@ SPICE parametric **control sweeps** (`spice.runner.make_control_dataset` +
 *dry* excitation and the target is the circuit's response. **~⅓ of training
 segments are real guitar-DI** windows (`DataConfig.di_mix=0.34`) run through the
 circuit, so the model sees real playing, not only synthetic excitation. Loss =
-ESR + 0.1·multi-resolution STFT; Adam, 80 epochs; everything seeded.
+ESR + 0.2·multi-resolution STFT (FFT windows 256/512/1024/2048; the 256 window
+resolves clipping edges); Adam; everything seeded.
+
+## High-frequency accuracy (harmonics & clipping transitions)
+
+The distortion's *character* lives in the high-order harmonics and the sharp
+clipping transitions, but plain ESR is energy-weighted and barely sees them, so an
+early CIRCE matched overall ESR while missing the bright detail. Addressed by:
+
+- **Capacity** (12→24 channels, +1 layer): the clean win. On the BJT it shrinks the
+  harmonic-6 error from a 13–19 dB miss to ~8 dB and the harmonic-9 miss from ~25 dB
+  to ~10 dB, lifting the whole high-harmonic stack — at ~3.7× RTF (still real-time).
+- **More training epochs** (cheap on a GPU): the strong-nonlinearity high harmonics
+  need the budget; high-harmonic level error drops ~10→6 dB by 300 epochs.
+- **Metrics to measure it** (`metrics.py`): `harmonic_level_error` (full + high
+  band), `pre_emph_esr`, `band_esr`, `knee_region_esr`, `slew_weighted_esr`,
+  `transfer_critical_error`, `crest_factor_error_db` — so HF error is tracked, not
+  hidden behind overall ESR. The validation report prints high-harmonic mean |err|.
+- **Pre-emphasis ESR** (`CIRCE(pre_emph=)`, opt-in, OFF by default): the literature's
+  go-to was a *net negative here* — it games the on-a-tone harmonic metric but hurts
+  the clipping-knee match and roughly doubles broadband ESR. Internal
+  oversampling/ADAA was rejected too (it *damps* the HF harmonics we want).
+
+**Honest residual limits:** the single *sharpest* transfer-curve knee (a near-
+instantaneous clipping corner) still rounds — a true step needs unbounded HF, which
+a small smooth real-time TCN can't synthesize; and the *conditioned* model spreads
+capacity across the whole 5–160 mV range, so at the extreme drive it's less accurate
+than a single-operating-point specialist. Further gains (more capacity/epochs/data,
+per-operating-point weighting) trade real-time headroom or training cost.
 
 ## Results — BJT overdrive (drive knob), the flagship
 

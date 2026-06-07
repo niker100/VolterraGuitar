@@ -363,6 +363,19 @@ a concrete deliverable):
   lowered the DC-blocker to 5 Hz (transfer-plot artifact + low-band intrusion),
   and added GPU training (`pick_device`/`to_inference_cpu`; CUDA torch on Windows;
   ~16× CIRCE-fit speedup; inference/RTF stay CPU so numbers are device-independent).
+- **High-frequency accuracy (post-shootout).** Addressed the under-fit of high
+  harmonics + sharp clipping transitions (the perceptually critical distortion
+  detail). Web-research workflow + GPU ablations (the 16x speedup enabled multi-seed
+  sweeps). Result: **capacity is the clean lever** (12->24 ch, +1 layer) -- BJT
+  harmonic-6 miss 13-19 dB -> ~8 dB, harmonic-9 ~25 -> ~10 dB, at ~3.7x RTF; more
+  epochs help further (10->6 dB by 300 ep). New HF/transient metrics (metrics.py:
+  harmonic_level_error, pre_emph_esr, band_esr, knee_region_esr, slew_weighted_esr,
+  transfer_critical_error, crest_factor_error_db). Pre-emphasis ESR (losses.py,
+  opt-in) was a NET NEGATIVE here (games the tone-harmonic metric, hurts the knee +
+  broadband) so it's off by default; internal oversampling/ADAA rejected (damps HF).
+  Residual limits: the single sharpest transfer knee still rounds (small smooth TCN
+  can't make a true step); the conditioned model is weaker at the extreme drive than
+  a single-point specialist.
 - **REMAINING (future, GATE-6+):** alias-free teacher-student fine-tune; active
   learning for >3 control axes; the nonlinear-feedback gap (feedforward cascades
   provably can't represent it — benchmark measures it, fix deferred); dwell/slew
