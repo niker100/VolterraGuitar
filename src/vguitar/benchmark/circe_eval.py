@@ -376,9 +376,10 @@ def _validate_one(
     regen: bool = False,
     seg_dur_s: float = 2.0,
     epochs: int = 80,
-    channels: int = 10,
+    channels: int = 12,
     n_blocks: int = 2,
     n_layers: int = 7,
+    di_mix: float | None = None,
     probe_thd: bool = True,
     console: Any = None,
 ) -> dict[str, Any]:
@@ -407,18 +408,23 @@ def _validate_one(
     )
     n_control = len(specs)
     sr = cfg.data.sr
+    di_mix_val = cfg.data.di_mix if di_mix is None else di_mix
 
     # --- datasets (cached) ---
+    # DI-mix is applied to the TRAIN set only; the held-out set stays synthetic so
+    # interpolation is measured cleanly (real-DI generalization is a separate probe).
     stem = "drive" if single_drive else "ctl"
     train_path = cfg.paths.data / f"{circuit_name}_{stem}.npz"
     test_path = cfg.paths.data / f"{circuit_name}_{stem}_test.npz"
     if regen or not train_path.exists() or not test_path.exists():
         console.print(f"[dim]simulating control sweep via ngspice ({len(train_grid)}+{len(held_grid)} settings)...[/]")
         if single_drive:
-            make_drive_dataset(circ, train_grid[:, 0].tolist(), cfg, seg_dur_s=seg_dur_s, seed=0).save(train_path)
+            make_drive_dataset(circ, train_grid[:, 0].tolist(), cfg, seg_dur_s=seg_dur_s, seed=0,
+                               di_mix=di_mix_val, di_path=_DI_PATH).save(train_path)
             make_drive_dataset(circ, held_grid[:, 0].tolist(), cfg, seg_dur_s=seg_dur_s, seed=100).save(test_path)
         else:
-            make_control_dataset(circ, train_grid, specs, cfg, seg_dur_s=seg_dur_s, seed=0).save(train_path)
+            make_control_dataset(circ, train_grid, specs, cfg, seg_dur_s=seg_dur_s, seed=0,
+                                 di_mix=di_mix_val, di_path=_DI_PATH).save(train_path)
             make_control_dataset(circ, held_grid, specs, cfg, seg_dur_s=seg_dur_s, seed=100).save(test_path)
     train_ds, test_ds = Dataset.load(train_path), Dataset.load(test_path)
 
@@ -513,9 +519,10 @@ def run_circe_eval(
     heatmap: bool = True,
     seg_dur_s: float = 2.0,
     epochs: int = 80,
-    channels: int = 10,
+    channels: int = 12,
     n_blocks: int = 2,
     n_layers: int = 7,
+    di_mix: float | None = None,
 ) -> list[dict[str, Any]]:
     """Validate CIRCE on a circuit's control axes; print a report and write figures."""
     import matplotlib.pyplot as plt
@@ -529,7 +536,8 @@ def run_circe_eval(
     res = _validate_one(
         circuit_name, control_specs=control_specs, grid=grid, drives=drives, held=held,
         cfg=cfg, retrain=retrain, regen=regen, seg_dur_s=seg_dur_s, epochs=epochs,
-        channels=channels, n_blocks=n_blocks, n_layers=n_layers, probe_thd=True, console=console,
+        channels=channels, n_blocks=n_blocks, n_layers=n_layers, di_mix=di_mix,
+        probe_thd=True, console=console,
     )
     from vguitar.circuits import get_circuit
     from vguitar.config import Config

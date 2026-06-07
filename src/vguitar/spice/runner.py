@@ -298,6 +298,22 @@ def make_dataset(circuit: Circuit, cfg: Config) -> Dataset:
     )
 
 
+_DEFAULT_DI_PATH = "assets/guitar_di_loop.wav"
+
+
+def _di_window(di: np.ndarray, n: int, offset_seed: int) -> np.ndarray:
+    """A unit-peak ``n``-sample window of the DI loop at a deterministic offset."""
+    di = np.asarray(di, dtype=np.float32).reshape(-1)
+    if di.size == 0 or n <= 0:
+        return di[:n].astype(np.float32)
+    if di.size < n:
+        di = np.tile(di, int(np.ceil(n / di.size)))
+    off = (offset_seed * 7919) % (di.size - n + 1)
+    w = di[off : off + n]
+    p = float(np.max(np.abs(w))) or 1.0
+    return (w / p).astype(np.float32)
+
+
 def make_control_dataset(
     circuit: Circuit,
     grid: np.ndarray,
@@ -307,6 +323,8 @@ def make_control_dataset(
     seg_dur_s: float = 3.0,
     seed: int = 0,
     excitation: np.ndarray | None = None,
+    di_mix: float = 0.0,
+    di_path: str | None = None,
     name: str | None = None,
     meta: dict[str, Any] | None = None,
 ) -> Dataset:
@@ -336,16 +354,22 @@ def make_control_dataset(
         excitation: optional shared unit-peak dry base used for *every* row
             (e.g. a guitar DI loop); when ``None``, each row gets its own rich
             synthetic excitation.
+        di_mix: fraction of rows (0..1) rendered with a real guitar-DI window as
+            the base instead of synthetic excitation. Putting real playing in the
+            training data closes the synthetic-vs-real generalization gap. Ignored
+            when ``excitation`` is given.
+        di_path: path to the guitar-DI loop (defaults to the bundled asset).
         name, meta: dataset label / provenance (sensible defaults if omitted).
 
     Returns:
         A conditioned :class:`Dataset` with one control column per spec.
     """
     from dataclasses import replace
+    from pathlib import Path
 
     from vguitar.config import Config
     from vguitar.data import Dataset
-    from vguitar.signals import build_training_excitation
+    from vguitar.signals import build_training_excitation, load_di
 
     grid = np.asarray(grid, dtype=np.float32)
     if grid.ndim == 1:
@@ -363,6 +387,16 @@ def make_control_dataset(
     pregain_idx = [i for i, s in enumerate(control_specs) if s.mode == "pregain"]
     netlist_idx = [i for i, s in enumerate(control_specs) if s.mode == "netlist"]
 
+    # Choose which rows use a real-DI base (spread evenly across the grid).
+    di_full: np.ndarray | None = None
+    di_rows: set[int] = set()
+    if excitation is None and di_mix > 0.0:
+        path = di_path or _DEFAULT_DI_PATH
+        if Path(path).exists():
+            di_full = load_di(path, sr, peak=1.0)
+            k = max(1, round(di_mix * len(grid)))
+            di_rows = set(np.linspace(0, len(grid) - 1, k).round().astype(int).tolist())
+
     xs: list[np.ndarray] = []
     ys: list[np.ndarray] = []
     bounds: list[int] = [0]
@@ -370,6 +404,8 @@ def make_control_dataset(
     for j, row in enumerate(grid):
         if excitation is not None:
             base = np.asarray(excitation, dtype=np.float32).reshape(-1)
+        elif j in di_rows and di_full is not None and di_full.size:
+            base = _di_window(di_full, round(seg_dur_s * sr), offset_seed=seed + j)
         else:
             # Unit-peak, content-rich dry excitation; the pregain axes do the scaling.
             dcfg = replace(cfg.data, duration_s=seg_dur_s, drive_levels=(1.0,), seed=seed + j)
@@ -407,6 +443,8 @@ def make_drive_dataset(
     *,
     seg_dur_s: float = 3.0,
     seed: int = 0,
+    di_mix: float = 0.0,
+    di_path: str | None = None,
 ) -> Dataset:
     """Generate a CONDITIONED dataset for one continuous "drive" control.
 
@@ -445,6 +483,8 @@ def make_drive_dataset(
         cfg,
         seg_dur_s=seg_dur_s,
         seed=seed,
+        di_mix=di_mix,
+        di_path=di_path,
         name=f"{circuit.name}_drive",
         meta={"circuit": circuit.name, "control": "drive", "drive_values": drives},
     )

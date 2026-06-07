@@ -120,6 +120,24 @@ def test_simulate_params_change_output() -> None:
     assert not np.allclose(y_small, y_large, atol=1e-4)
 
 
+def test_make_control_dataset_di_mix() -> None:
+    """DI-mixed generation runs the real DI through the circuit for ground-truth
+    targets and still produces a well-formed conditioned dataset."""
+    from pathlib import Path
+
+    from vguitar.spice.runner import make_control_dataset
+
+    if not Path("assets/guitar_di_loop.wav").exists():
+        pytest.skip("guitar DI asset missing")
+    circ = _ParamDiode()
+    specs = list(circ.controls)
+    grid = np.array([[0.8, 1e-9], [1.2, 1e-8], [1.6, 3e-8]], np.float32)
+    ds = make_control_dataset(circ, grid, specs, seg_dur_s=0.12, seed=0, di_mix=1.0)
+    assert ds.n_controls == 2 and ds.controls is not None
+    assert ds.controls.shape == (len(ds), 2)
+    assert np.all(np.isfinite(ds.y)) and np.any(ds.y != 0)
+
+
 @pytest.mark.parametrize("circuit_name", ["jfet", "tube_screamer", "big_muff"])
 def test_complex_circuit_converges(circuit_name: str) -> None:
     """Each complex circuit converges (finite, correct length) at default and at

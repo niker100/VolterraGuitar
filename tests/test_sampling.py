@@ -110,3 +110,29 @@ def test_base_netlist_for_default_ignores_params() -> None:
     diode = get_circuit("diode")
     assert diode.netlist_for(None) == diode.netlist()
     assert diode.netlist_for({}) == diode.netlist()
+
+
+# --- DI window helper (pure) -----------------------------------------------
+def test_di_window_unit_peak_and_length() -> None:
+    from vguitar.spice.runner import _di_window
+
+    di = (0.4 * np.sin(2 * np.pi * np.arange(2000) / 53.0)).astype(np.float32)
+    w = _di_window(di, 256, offset_seed=3)
+    assert w.shape == (256,)
+    assert abs(float(np.max(np.abs(w))) - 1.0) < 1e-5  # re-peak-normalized
+
+
+def test_di_window_deterministic_and_offset_varies() -> None:
+    from vguitar.spice.runner import _di_window
+
+    di = (0.4 * np.sin(2 * np.pi * np.arange(2000) / 53.0)).astype(np.float32)
+    assert np.array_equal(_di_window(di, 256, 3), _di_window(di, 256, 3))
+    assert not np.array_equal(_di_window(di, 256, 3), _di_window(di, 256, 9))
+
+
+def test_di_window_tiles_when_short() -> None:
+    from vguitar.spice.runner import _di_window
+
+    di = np.linspace(-1, 1, 100, dtype=np.float32)
+    w = _di_window(di, 350, offset_seed=0)  # n > len(di) -> tile
+    assert w.shape == (350,) and np.all(np.isfinite(w))

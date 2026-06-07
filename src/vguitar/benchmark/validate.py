@@ -44,7 +44,8 @@ def run_validation(
     regen: bool = False,
     seg_dur_s: float = 2.0,
     epochs: int = 80,
-    channels: int = 10,
+    channels: int = 12,
+    di_mix: float | None = None,
 ) -> dict[str, Any]:
     """Validate CIRCE across ``circuit_names``; aggregate + plot the comparison.
 
@@ -81,7 +82,7 @@ def run_validation(
         console.print(f"[bold]validating[/] {cname} ...")
         res = _validate_one(
             cname, cfg=cfg, retrain=retrain, regen=regen, seg_dur_s=seg_dur_s,
-            epochs=epochs, channels=channels, probe_thd=False, console=console,
+            epochs=epochs, channels=channels, di_mix=di_mix, probe_thd=False, console=console,
         )
         interp = res["interp"]
         summary.append({

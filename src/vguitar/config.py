@@ -43,6 +43,11 @@ class DataConfig:
     # amplitude coverage is essential: Volterra/neural models diverge outside
     # the amplitude range they were trained on (a v1 failure mode).
     drive_levels: tuple[float, ...] = (0.02, 0.05, 0.1, 0.25, 0.5, 1.0)
+    # Fraction of conditioned-training segments rendered from a real guitar-DI
+    # window instead of synthetic excitation. Putting real playing in the
+    # training set closes the synthetic-vs-real generalization gap (used by the
+    # CIRCE control-sweep generation; the unconditioned make_dataset ignores it).
+    di_mix: float = 0.34
 
 
 @dataclass(frozen=True)
