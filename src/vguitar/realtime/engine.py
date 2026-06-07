@@ -31,13 +31,29 @@ to evaluate models in the benchmark / on CI.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from vguitar.config import RealtimeConfig
     from vguitar.models.base import Model
+
+
+def _control_for_block(control: Any, idx: int, n_blocks: int) -> np.ndarray | None:
+    """A control source for conditioned playback is a constant vector ``(K,)``, a
+    per-block schedule ``(n_blocks, K)``, or a callable ``block_idx -> (K,)``."""
+    """Resolve the control vector for output block ``idx`` (see :data:`Control`)."""
+    if control is None:
+        return None
+    if callable(control):
+        return np.asarray(control(idx), dtype=np.float32).reshape(-1)
+    arr = np.asarray(control, dtype=np.float32)
+    if arr.ndim == 1:
+        return arr
+    return arr[min(idx, arr.shape[0] - 1)]
 
 
 def measure_rtf(
@@ -82,7 +98,8 @@ def measure_rtf(
     }
 
 
-def render_file(model: Model, in_path: str, out_path: str, sr: int = 44_100) -> None:
+def render_file(model: Model, in_path: str, out_path: str, sr: int = 44_100,
+                *, control: Any = None) -> None:
     """Offline fallback: stream a wav through the model and write the result.
 
     Reads ``in_path`` (mono; if multichannel, the first channel is used),
@@ -90,6 +107,10 @@ def render_file(model: Model, in_path: str, out_path: str, sr: int = 44_100) -> 
     *streaming* path (so the output matches what the live engine would produce),
     and writes ``out_path``. Useful for listening on machines with no audio
     device or where opening a duplex stream is impractical (CI, containers).
+
+    ``control`` drives a conditioned model: a constant vector ``(K,)``, a per-
+    block schedule ``(n_blocks, K)``, or a callable ``block_idx -> (K,)`` for a
+    knob automation. ``None`` (the default) runs an unconditioned model unchanged.
     """
     import soundfile as sf
     import soxr
@@ -100,11 +121,15 @@ def render_file(model: Model, in_path: str, out_path: str, sr: int = 44_100) -> 
         x = soxr.resample(x, file_sr, sr, quality="VHQ").astype(np.float32)
 
     model.reset()
+    m: Any = model  # conditioned models accept the extra control arg
     block = 1024
     out = np.empty_like(x)
-    for i in range(0, len(x), block):
+    n_blocks = (len(x) + block - 1) // block
+    for bi, i in enumerate(range(0, len(x), block)):
         chunk = x[i : i + block]
-        out[i : i + len(chunk)] = np.asarray(model.process_block(chunk), dtype=np.float32)
+        c = _control_for_block(control, bi, n_blocks)
+        y = m.process_block(chunk, c) if c is not None else m.process_block(chunk)
+        out[i : i + len(chunk)] = np.asarray(y, dtype=np.float32)
     np.clip(out, -1.0, 1.0, out=out)
     sf.write(out_path, out, sr)
 
@@ -120,13 +145,32 @@ class LiveEngine:
     Use :meth:`start` / :meth:`stop`; the engine is also a context manager.
     """
 
-    def __init__(self, model: Model, cfg: RealtimeConfig) -> None:
+    def __init__(self, model: Model, cfg: RealtimeConfig,
+                 control_fn: Callable[[int], np.ndarray] | None = None) -> None:
         self.model = model
         self.cfg = cfg
+        #: Optional live control source for a conditioned model: called once per
+        #: callback with the block index, returns the control vector ``(K,)``
+        #: (e.g. a closure over a MIDI/OSC/GUI knob). ``None`` => unconditioned.
+        self._control_fn = control_fn
+        self._cbuf = np.zeros(int(getattr(model, "n_control", 0)), dtype=np.float32)
+        self._block_idx = 0
+        # Process function chosen once in start() to keep the callback branch-light.
+        self._proc: Callable[[np.ndarray], np.ndarray] = model.process_block
         self._stream = None  # type: ignore[var-annotated]  # sounddevice.Stream, lazy import
         self._up = None  # soxr.ResampleStream sr -> os_sr
         self._down = None  # soxr.ResampleStream os_sr -> sr
         self._fifo = np.empty(0, dtype=np.float32)  # re-blocking buffer (oversampled path)
+
+    def _proc_conditioned(self, x: np.ndarray) -> np.ndarray:
+        """Fill the preallocated control buffer from ``control_fn`` and run the model."""
+        cf = self._control_fn
+        assert cf is not None
+        vec = np.asarray(cf(self._block_idx), dtype=np.float32).reshape(-1)
+        self._cbuf[:] = vec[: self._cbuf.shape[0]]
+        self._block_idx += 1
+        model: Any = self.model  # conditioned models accept the extra control arg
+        return model.process_block(x, self._cbuf)
 
     # --- lifecycle --------------------------------------------------------
     def start(self) -> None:
@@ -136,6 +180,8 @@ class LiveEngine:
         cfg = self.cfg
         self.model.reset()
         self._fifo = np.empty(0, dtype=np.float32)
+        self._block_idx = 0
+        self._proc = self._proc_conditioned if self._control_fn is not None else self.model.process_block
 
         os_factor = max(1, int(cfg.oversample))
         if os_factor > 1:
@@ -190,7 +236,7 @@ class LiveEngine:
         """Base-rate path: model runs directly at ``cfg.sr``."""
         try:
             x = np.ascontiguousarray(indata[:, 0], dtype=np.float32)
-            y = np.asarray(self.model.process_block(x), dtype=np.float32)
+            y = np.asarray(self._proc(x), dtype=np.float32)
             if y.shape[0] != frames:  # guard: model must return same length
                 y = np.resize(y, frames)
             np.clip(y, -1.0, 1.0, out=y)
@@ -208,7 +254,7 @@ class LiveEngine:
             x = np.ascontiguousarray(indata[:, 0], dtype=np.float32)
             up = up_stream.resample_chunk(x)
             if up.size:
-                proc = np.asarray(self.model.process_block(up), dtype=np.float32)
+                proc = np.asarray(self._proc(up), dtype=np.float32)
                 down = down_stream.resample_chunk(proc)
                 if down.size:
                     self._fifo = np.concatenate((self._fifo, down))

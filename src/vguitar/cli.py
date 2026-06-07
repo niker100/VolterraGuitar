@@ -25,7 +25,7 @@ import argparse
 import contextlib
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -193,6 +193,69 @@ def cmd_bench(args: argparse.Namespace, cfg: Config) -> int:
 
 
 # --- live -----------------------------------------------------------------
+def _control_specs_for(circ: Any, model: Any) -> list:
+    """Control specs for a conditioned model: the circuit's, or generic c0..cK-1."""
+    from vguitar.circuits.base import ControlSpec
+
+    n = int(getattr(model, "n_control", 0))
+    if n <= 0:
+        return []
+    if circ.controls and len(circ.controls) == n:
+        return list(circ.controls)
+    names = ["drive"] if n == 1 else [f"c{i}" for i in range(n)]
+    return [ControlSpec(nm) for nm in names]
+
+
+def _control_value_fn(control_str: str | None, automation_path: str | None, specs: list) -> Any:
+    """Build ``value_at(t_seconds) -> (K,) vector`` from --control / --automation.
+
+    ``--control "drive=0.08,tone=0.6"`` is a constant; ``--automation file.json``
+    is a list of breakpoints ``[{"t": sec, <name>: val, ...}, ...]`` linearly
+    interpolated over time. Returns ``None`` when neither is given.
+    """
+    if not specs:
+        return None
+    names = [s.name for s in specs]
+    base = np.array([s.default for s in specs], dtype=np.float32)
+    idx = {nm: i for i, nm in enumerate(names)}
+
+    def vec_from(d: dict) -> np.ndarray:
+        v = base.copy()
+        for k, val in d.items():
+            if k in idx:
+                v[idx[k]] = float(val)
+        return v
+
+    if automation_path:
+        import json
+
+        bps = sorted(json.loads(Path(automation_path).read_text()), key=lambda b: float(b.get("t", 0.0)))
+        ts = np.array([float(b.get("t", 0.0)) for b in bps], dtype=np.float64)
+        vecs = np.array([vec_from(b) for b in bps], dtype=np.float32)
+
+        def value_at(t: float) -> np.ndarray:
+            if t <= ts[0]:
+                return vecs[0]
+            if t >= ts[-1]:
+                return vecs[-1]
+            j = int(np.searchsorted(ts, t))
+            w = (t - ts[j - 1]) / (ts[j] - ts[j - 1]) if ts[j] > ts[j - 1] else 0.0
+            return ((1.0 - w) * vecs[j - 1] + w * vecs[j]).astype(np.float32)
+
+        return value_at
+
+    if control_str:
+        d = {k.split("=")[0].strip(): k.split("=", 1)[1].strip()
+             for k in control_str.split(",") if "=" in k}
+        const = vec_from(d)
+
+        def value_at(_t: float) -> np.ndarray:
+            return const
+
+        return value_at
+    return None
+
+
 def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
     """Load a trained model and either render a WAV pair or run the live engine."""
     from dataclasses import replace
@@ -216,6 +279,15 @@ def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
         return _fail(str(exc))
     model = model_cls.load(run)
 
+    # Optional control source for a conditioned model (e.g. CIRCE).
+    from vguitar.circuits import get_circuit
+
+    specs = _control_specs_for(get_circuit(args.circuit), model)
+    value_at = _control_value_fn(getattr(args, "control", None), getattr(args, "automation", None), specs)
+    if value_at is not None and not specs:
+        print("  (model is not conditioned; ignoring --control/--automation)")
+        value_at = None
+
     if args.in_wav or args.out_wav:
         if not (args.in_wav and args.out_wav):
             return _fail("both --in and --out are required for file rendering")
@@ -223,7 +295,14 @@ def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
             from vguitar.realtime import render_file
         except ImportError as exc:
             return _fail(f"realtime module unavailable: {exc}")
-        render_file(model, args.in_wav, args.out_wav, cfg.realtime.sr)
+        control = None
+        if value_at is not None:
+            sr = cfg.realtime.sr
+
+            def control(bi: int) -> np.ndarray:
+                return value_at(bi * 1024 / sr)
+
+        render_file(model, args.in_wav, args.out_wav, cfg.realtime.sr, control=control)
         print(f"rendered {args.in_wav} -> {args.out_wav}")
         return 0
 
@@ -233,7 +312,14 @@ def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
         from vguitar.realtime import LiveEngine
     except ImportError as exc:
         return _fail(f"realtime module unavailable: {exc}")
-    engine = LiveEngine(model, cfg.realtime)
+    control_fn = None
+    if value_at is not None:
+        bs, sr = cfg.realtime.block_size, cfg.realtime.sr
+
+        def control_fn(bi: int) -> np.ndarray:
+            return value_at(bi * bs / sr)
+
+    engine = LiveEngine(model, cfg.realtime, control_fn=control_fn)
     print("starting live engine (Ctrl-C to stop)...")
     try:
         engine.start()
@@ -568,6 +654,10 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--in", dest="in_wav", default=None, help="input WAV (offline render)")
     sp.add_argument("--out", dest="out_wav", default=None, help="output WAV (offline render)")
     sp.add_argument("--device", type=int, default=None, help="PortAudio device index")
+    sp.add_argument("--control", default=None,
+                    help="conditioned model: constant knobs, e.g. 'drive=0.08,tone=0.6'")
+    sp.add_argument("--automation", default=None,
+                    help="conditioned model: JSON breakpoints [{\"t\":sec,<name>:val,...}] (knob automation)")
     sp.set_defaults(func=cmd_live)
 
     sp = sub.add_parser("selftest", help="smoke-test every model and the ngspice path")
