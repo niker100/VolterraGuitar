@@ -606,6 +606,22 @@ def cmd_circe(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def cmd_shootout(args: argparse.Namespace, cfg: Config) -> int:
+    """Fixed-operating-point head-to-head: CIRCE vs baselines, per circuit + audio."""
+    try:
+        from vguitar.benchmark.shootout import run_shootout
+    except ImportError as exc:
+        return _fail(f"shootout unavailable: {exc}")
+    circuits = [c.strip() for c in args.circuits.split(",") if c.strip()]
+    models = tuple(m.strip() for m in args.models.split(",") if m.strip()) if args.models else None
+    try:
+        run_shootout(circuits, models=models, cfg=cfg, epochs=args.epochs,
+                     retrain=args.retrain, regen=args.regen)
+    except (KeyError, RuntimeError, FileNotFoundError) as exc:
+        return _fail(str(exc))
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace, cfg: Config) -> int:
     """Validate CIRCE across a set of circuits; emit cross-circuit comparison figures."""
     try:
@@ -680,6 +696,15 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-render", dest="render", action="store_false", help="skip A/B wav renders")
     sp.add_argument("--no-heatmap", dest="heatmap", action="store_false", help="skip drive-freq heatmap")
     sp.set_defaults(func=cmd_circe)
+
+    sp = sub.add_parser("shootout", help="fixed-point head-to-head: CIRCE vs baselines per circuit (+ audio)")
+    sp.add_argument("--circuits", required=True, help="comma-separated circuit names")
+    sp.add_argument("--models", default=None,
+                    help="comma-separated baselines (default: fir,volterra,volterra_pc,wh,tcn,rnn; circe always)")
+    sp.add_argument("--epochs", type=int, default=50, help="training epochs for every method")
+    sp.add_argument("--retrain", action="store_true", help="ignored placeholder (always trains fresh)")
+    sp.add_argument("--regen", action="store_true", help="re-simulate the shootout datasets")
+    sp.set_defaults(func=cmd_shootout)
 
     sp = sub.add_parser("validate", help="validate CIRCE across several circuits; emit comparison figures")
     sp.add_argument("--circuits", required=True, help="comma-separated circuit names")
