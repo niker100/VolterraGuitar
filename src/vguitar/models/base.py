@@ -205,3 +205,45 @@ def get_model(name: str) -> type[Model]:
 
 def all_models() -> dict[str, type[Model]]:
     return dict(_REGISTRY)
+
+
+# --- device selection -----------------------------------------------------
+def pick_device(prefer: str = "auto") -> str:
+    """Choose a TRAINING device: ``"cuda"`` if available, else ``"cpu"``.
+
+    Training is the only place a GPU helps here — the real-time deployment target
+    (streaming ``process_block`` / RTF) is always CPU, so :func:`to_inference_cpu`
+    moves a model back to the CPU after training. ``prefer="cpu"`` forces CPU
+    (e.g. for honest RTF or when reproducing CPU numbers).
+    """
+    if prefer == "cpu":
+        return "cpu"
+    try:
+        import torch
+
+        if prefer in ("auto", "cuda") and torch.cuda.is_available():
+            return "cuda"
+    except Exception:
+        pass
+    return "cpu"
+
+
+def to_inference_cpu(model: Any) -> Any:
+    """Move a (possibly GPU-trained) model to the CPU for honest inference/RTF.
+
+    The benchmark's real-time factor and streaming equivalence must reflect the
+    CPU deployment target, and some models stream via torch on their device. After
+    training on the GPU, call this so ``process`` / ``process_block`` / RTF all run
+    on the CPU. No-op for models already on CPU or without a torch device.
+    """
+    dev = getattr(model, "device", None)
+    if dev is not None and str(dev) != "cpu":
+        import torch
+
+        model.device = torch.device("cpu")
+        net = getattr(model, "net", None)
+        if net is not None:
+            net.to("cpu")
+        if hasattr(model, "reset"):
+            model.reset()
+    return model

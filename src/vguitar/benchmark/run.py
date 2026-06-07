@@ -33,6 +33,7 @@ from vguitar.circuits import get_circuit
 from vguitar.config import Config
 from vguitar.data import Dataset
 from vguitar.models import all_models, get_model
+from vguitar.models.base import pick_device, to_inference_cpu
 from vguitar.realtime import measure_rtf
 
 
@@ -73,6 +74,7 @@ def _evaluate(
 ) -> dict[str, Any]:
     """Fit one model and measure accuracy, size, latency, and speed."""
     model.fit(train, val, cfg.train)
+    to_inference_cpu(model)  # train may use the GPU; RTF/inference must be CPU-honest
     y_pred = np.asarray(model.process(test.x), dtype=np.float32)
     rtf = measure_rtf(model, sr=cfg.realtime.sr, block=cfg.realtime.block_size)
     return {
@@ -125,11 +127,13 @@ def run_benchmark(
     # unconditioned benchmark unless explicitly requested.
     registry = all_models()
     names = model_names or sorted(n for n, cls in registry.items() if not cls.conditioned)
+    device = pick_device()
+    console.print(f"[dim]training device: {device} (inference/RTF on CPU)[/]")
     rows: list[dict[str, Any]] = []
     for name in names:
         console.print(f"  training [cyan]{name}[/] ...")
         try:
-            model = _instantiate(name, cfg.train.device)
+            model = _instantiate(name, device)
             row = _evaluate(name, model, train, val, test, cfg)
             with _suppress():
                 model.save(cfg.paths.runs / f"{circuit_name}.{name}.model")

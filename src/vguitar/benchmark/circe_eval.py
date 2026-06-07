@@ -398,7 +398,12 @@ def _validate_one(
     from vguitar import metrics
     from vguitar.config import Config, TrainConfig
     from vguitar.data import Dataset
-    from vguitar.models.base import check_streaming, check_streaming_moving
+    from vguitar.models.base import (
+        check_streaming,
+        check_streaming_moving,
+        pick_device,
+        to_inference_cpu,
+    )
     from vguitar.models.circe import CIRCE, _segments
     from vguitar.realtime import measure_rtf
     from vguitar.spice.runner import make_control_dataset, make_drive_dataset, simulate
@@ -441,13 +446,16 @@ def _validate_one(
 
         torch.manual_seed(0)
         tr, va, _ = train_ds.split(0.12, 0.0001)
-        model = CIRCE(n_control=n_control, channels=channels, n_blocks=n_blocks, n_layers=n_layers)
-        console.print("[dim]training CIRCE...[/]")
+        dev = pick_device()
+        console.print(f"[dim]training CIRCE on {dev} (inference on CPU)...[/]")
+        model = CIRCE(n_control=n_control, channels=channels, n_blocks=n_blocks,
+                      n_layers=n_layers, device=dev)
         report = model.fit(tr, va, TrainConfig(epochs=epochs, seq_len=2048, batch_size=16, lr=3e-3, warmup=256))
         model.save(model_path)
         hist_path.write_text(json.dumps(report.history))
     else:
         model = CIRCE.load(load_path)
+    to_inference_cpu(model)  # honest CPU RTF/streaming regardless of training device
 
     # --- per-setting metrics from the cached datasets ---
     rows: list[dict[str, Any]] = []

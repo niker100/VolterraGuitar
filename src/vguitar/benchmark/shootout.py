@@ -100,9 +100,11 @@ def _shootout_one(
     import matplotlib.pyplot as plt
 
     from vguitar import plotting as plot
+    from vguitar.benchmark.run import _instantiate
     from vguitar.circuits import get_circuit
     from vguitar.data import Dataset
     from vguitar.models import get_model
+    from vguitar.models.base import pick_device, to_inference_cpu
     from vguitar.models.circe import CIRCE
     from vguitar.realtime import measure_rtf
     from vguitar.spice.runner import make_drive_dataset, simulate
@@ -123,7 +125,9 @@ def _shootout_one(
     train_ds, test_ds = Dataset.load(tr_path), Dataset.load(te_path)
     tr, va, _ = train_ds.split(0.12, 0.0001)
 
-    # --- train every method on identical data ---
+    # --- train every method on identical data (GPU if available; infer on CPU) ---
+    dev = pick_device()
+    console.print(f"  training device: [bold]{dev}[/] (inference/RTF measured on CPU)")
     trained: dict[str, tuple[Any, bool]] = {}
     for name in baselines:
         cls = get_model(name)
@@ -131,9 +135,9 @@ def _shootout_one(
             continue
         try:
             console.print(f"  training [cyan]{name}[/] ...")
-            m = cls()
+            m = _instantiate(name, dev)  # passes device to ctors that accept it
             m.fit(_uncond(tr), _uncond(va), train_cfg)
-            trained[name] = (m, False)
+            trained[name] = (to_inference_cpu(m), False)  # CPU for honest RTF/streaming
         except Exception as exc:  # a model must not abort the shootout
             console.print(f"    [red]{name} failed: {exc}[/]")
     try:
@@ -141,9 +145,9 @@ def _shootout_one(
 
         torch.manual_seed(0)
         console.print("  training [magenta]circe[/] ...")
-        mc = CIRCE(n_control=1, channels=12, n_blocks=2, n_layers=7)
+        mc = CIRCE(n_control=1, channels=12, n_blocks=2, n_layers=7, device=dev)
         mc.fit(tr, va, replace(train_cfg, seq_len=2048, batch_size=16, lr=3e-3, warmup=256))
-        trained["circe"] = (mc, True)
+        trained["circe"] = (to_inference_cpu(mc), True)
     except Exception as exc:
         console.print(f"    [red]circe failed: {exc}[/]")
 
