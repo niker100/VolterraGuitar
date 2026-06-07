@@ -112,7 +112,9 @@ def _shootout_one(
     circ = get_circuit(circuit_name)
     g_nom = float(circ.nominal_drive_v)
     sr = cfg.data.sr
-    train_cfg = replace(cfg.train, epochs=epochs)
+    # Same gentle lr for every neural model (the 5e-3 default diverges the big
+    # feedforward/recurrent nets on the hard circuits); fair shared recipe.
+    train_cfg = replace(cfg.train, epochs=epochs, lr=3e-3)
     console.print(f"[bold]shootout[/] {circuit_name} @ drive={g_nom:g} V")
 
     # --- datasets: one operating point, train + held-out (new content) ---
