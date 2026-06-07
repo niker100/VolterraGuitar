@@ -389,6 +389,90 @@ def fig_interp_vs_distance(dist: np.ndarray, esr_vals: np.ndarray, held_mask: np
     return fig
 
 
+def fig_circuit_model_esr(matrix: np.ndarray, circuits: list[str], models: list[str],
+                          *, name: str = "") -> Figure:
+    """Circuit (rows) x model (cols) ESR heatmap on a log colour scale (lower =
+    better), each cell annotated with its ESR. The headline cross-circuit view of
+    which model captured which circuit."""
+    from matplotlib.colors import LogNorm
+
+    m = np.asarray(matrix, dtype=np.float64)
+    finite = m[np.isfinite(m) & (m > 0)]
+    lo = max(float(finite.min()) if finite.size else 1e-3, 1e-4)
+    hi = max(float(finite.max()) if finite.size else 1.0, lo * 1.001)
+    fig, ax = plt.subplots(figsize=(1.6 + 1.1 * len(models), 1.4 + 0.6 * len(circuits)))
+    im = ax.imshow(m, aspect="auto", cmap=CMAP_MAG, norm=LogNorm(vmin=lo, vmax=hi))
+    ax.set_xticks(range(len(models)), models, rotation=30, ha="right")
+    ax.set_yticks(range(len(circuits)), circuits)
+    for i in range(len(circuits)):
+        for j in range(len(models)):
+            v = m[i, j]
+            if np.isfinite(v):
+                ax.text(j, i, f"{v:.3f}", ha="center", va="center", fontsize=8,
+                        color="white" if v < (lo * hi) ** 0.5 else "black")
+    ax.set(title=f"{name} ESR by circuit x model".strip())
+    ax.grid(False)
+    fig.colorbar(im, ax=ax, label="ESR (log)")
+    fig.tight_layout()
+    return fig
+
+
+def fig_cross_circuit_summary(rows: list[dict], *, name: str = "") -> Figure:
+    """Per-circuit CIRCE trained vs held-out ESR (grouped bars, log-y) with the
+    moving-knob RTF overlaid on a twin axis (dashed line = real-time threshold)."""
+    circuits = [r["circuit"] for r in rows]
+    trained = np.array([r.get("trained_esr", np.nan) for r in rows], dtype=np.float64)
+    held = np.array([r.get("held_mean", np.nan) for r in rows], dtype=np.float64)
+    rtf = np.array([r.get("rtf_m", np.nan) for r in rows], dtype=np.float64)
+    x = np.arange(len(circuits))
+    col = color_for("circe")
+
+    fig, ax = plt.subplots(figsize=(1.8 + 1.3 * len(circuits), 4.2))
+    ax.bar(x - 0.2, trained, width=0.38, color=col, label="trained ESR")
+    ax.bar(x + 0.2, held, width=0.38, facecolor="white", edgecolor=col, linewidth=1.6,
+           hatch="//", label="held-out ESR")
+    ax.set_xticks(x, circuits, rotation=20, ha="right")
+    ax.set(ylabel="ESR (log)", yscale="log", title=f"{name} CIRCE across circuits".strip())
+    ax.legend(loc="upper left", fontsize=8)
+
+    ax2 = ax.twinx()
+    ax2.plot(x, rtf, "o-", color=OKABE_ITO["gray"], lw=1.2, label="moving-knob RTF")
+    ax2.axhline(1.0, color="k", ls="--", lw=0.8)
+    ax2.set_ylabel("real-time factor")
+    ax2.spines["top"].set_visible(False)
+    ax2.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_multimodel_control_response(control_vals: np.ndarray, circuit_y: np.ndarray,
+                                    model_ys: dict[str, np.ndarray], *,
+                                    held_mask: np.ndarray | None = None, ylabel: str = "THD",
+                                    control_name: str = "drive", name: str = "") -> Figure:
+    """A metric vs one control knob, with several models overlaid (circuit black).
+
+    The multi-model analogue of :func:`fig_control_response`: each model gets its
+    stable colour; held-out control settings are marked by dashed verticals."""
+    cv = np.asarray(control_vals, dtype=np.float64)
+    order = np.argsort(cv)
+    cv = cv[order]
+    cy = np.asarray(circuit_y, dtype=np.float64)[order]
+    held = None if held_mask is None else np.asarray(held_mask, bool)[order]
+
+    fig, ax = plt.subplots(figsize=(7.4, 4.4))
+    ax.plot(cv, cy, "-o", color="k", lw=1.9, ms=5, label="circuit", zorder=3)
+    for mname, my in model_ys.items():
+        ax.plot(cv, np.asarray(my, dtype=np.float64)[order], "-", color=color_for(mname),
+                lw=1.3, label=mname, zorder=2)
+    if held is not None and held.any():
+        for c in cv[held]:
+            ax.axvline(c, color=OKABE_ITO["gray"], ls="--", lw=0.7, alpha=0.7)
+    ax.set(title=f"{name} {ylabel} vs {control_name}", xlabel=control_name, ylabel=ylabel)
+    ax.legend(fontsize=8, ncol=2)
+    fig.tight_layout()
+    return fig
+
+
 def fig_control_esr_heatmap(vals_i: np.ndarray, vals_j: np.ndarray, esr_grid: np.ndarray,
                             *, names: tuple[str, str] = ("c0", "c1"), name: str = "") -> Figure:
     """ESR over a 2-D control plane (two knobs, others at default): the multi-

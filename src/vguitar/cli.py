@@ -516,6 +516,21 @@ def cmd_circe(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
+def cmd_validate(args: argparse.Namespace, cfg: Config) -> int:
+    """Validate CIRCE across a set of circuits; emit cross-circuit comparison figures."""
+    try:
+        from vguitar.benchmark.validate import run_validation
+    except ImportError as exc:
+        return _fail(f"validate unavailable: {exc}")
+    circuits = [c.strip() for c in args.circuits.split(",") if c.strip()]
+    models = tuple(m.strip() for m in args.models.split(",") if m.strip()) if args.models else ("circe",)
+    try:
+        run_validation(circuits, models=models, cfg=cfg, retrain=args.retrain, regen=args.regen)
+    except (KeyError, RuntimeError, FileNotFoundError) as exc:
+        return _fail(str(exc))
+    return 0
+
+
 # --- argument parser ------------------------------------------------------
 def _build_parser() -> argparse.ArgumentParser:
     """Construct the argparse tree (one subparser per subcommand)."""
@@ -571,6 +586,14 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--no-render", dest="render", action="store_false", help="skip A/B wav renders")
     sp.add_argument("--no-heatmap", dest="heatmap", action="store_false", help="skip drive-freq heatmap")
     sp.set_defaults(func=cmd_circe)
+
+    sp = sub.add_parser("validate", help="validate CIRCE across several circuits; emit comparison figures")
+    sp.add_argument("--circuits", required=True, help="comma-separated circuit names")
+    sp.add_argument("--models", default=None,
+                    help="comma-separated matrix columns (default: circe; add baselines e.g. tcn,volterra)")
+    sp.add_argument("--retrain", action="store_true", help="retrain even if saved models exist")
+    sp.add_argument("--regen", action="store_true", help="re-simulate the control-sweep datasets")
+    sp.set_defaults(func=cmd_validate)
 
     return p
 
