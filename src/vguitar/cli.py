@@ -701,7 +701,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--circuits", required=True, help="comma-separated circuit names")
     sp.add_argument("--models", default=None,
                     help="comma-separated baselines (default: fir,volterra,volterra_pc,wh,tcn,rnn; circe always)")
-    sp.add_argument("--epochs", type=int, default=100, help="training epochs for every neural method")
+    sp.add_argument("--epochs", type=int, default=200, help="training epochs for every neural method")
     sp.add_argument("--retrain", action="store_true", help="ignored placeholder (always trains fresh)")
     sp.add_argument("--regen", action="store_true", help="re-simulate the shootout datasets")
     sp.set_defaults(func=cmd_shootout)

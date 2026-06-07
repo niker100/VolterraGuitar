@@ -587,10 +587,12 @@ def run_circe_eval(
     zero_str = ", ".join(
         f"[{','.join(f'{v:g}' for v in z['control'])}]:{z['dbfs']:.0f}dB" for z in stab["zero"]
     )
-    harm = [r["harm_hi"] for r in rows if "harm_hi" in r]
+    # Only average where the circuit actually distorts (THD>0.15); at clean low
+    # drives harmonics 6-12 sit at the noise floor and the dB error is meaningless.
+    harm = [r["harm_hi"] for r in rows if "harm_hi" in r and r.get("thd_c", 0.0) > 0.15]
     harm_str = (
         f"[bold]high-harmonics[/] mean |err|={np.mean(harm):.1f} dB "
-        f"(harmonics 6-12 @1kHz; lower=brighter detail matched)\n"
+        f"(harmonics 6-12 @1kHz, distorting settings; lower=brighter detail matched)\n"
         if harm
         else ""
     )
