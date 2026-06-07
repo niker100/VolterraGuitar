@@ -152,13 +152,15 @@ class VolterraPC(Model):
         successive paths explore different directions (random-restart flavour).
         """
         m = self.mem
+        n = x.shape[0]
         # Cross-correlation r_xe[tau] = sum_n x[n-tau] residual[n], tau=0..m-1.
-        # Implemented as correlation of residual against a windowed x.
-        xc = np.correlate(residual, x, mode="full")
-        mid = len(x) - 1  # zero-lag index in 'full' correlation
-        h = xc[mid : mid + m]
-        if h.shape[0] < m:  # short signals: pad
-            h = np.pad(h, (0, m - h.shape[0]))
+        # Only the first m lags are needed, so compute them directly in O(n*m)
+        # instead of np.correlate's full O(n^2) direct correlation (the latter is
+        # catastrophic on long signals: it would correlate ~10^5 samples just to
+        # keep 64 lags). This is exactly the same slice np.correlate would return.
+        h = np.zeros(m, dtype=np.float64)
+        for tau in range(min(m, n)):
+            h[tau] = float(np.dot(residual[tau:], x[: n - tau]))
         h = h + rng.standard_normal(m) * (np.std(h) * 0.1 + 1e-9)
         nrm = float(np.linalg.norm(h))
         return h / nrm if nrm > 0 else h
