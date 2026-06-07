@@ -43,8 +43,8 @@ def run_validation(
     retrain: bool = False,
     regen: bool = False,
     seg_dur_s: float = 2.0,
-    epochs: int = 80,
-    channels: int = 12,
+    epochs: int = 150,
+    channels: int = 24,
     di_mix: float | None = None,
 ) -> dict[str, Any]:
     """Validate CIRCE across ``circuit_names``; aggregate + plot the comparison.

@@ -147,7 +147,7 @@ def _shootout_one(
 
         torch.manual_seed(0)
         console.print("  training [magenta]circe[/] ...")
-        mc = CIRCE(n_control=1, channels=12, n_blocks=2, n_layers=7, device=dev)
+        mc = CIRCE(n_control=1, channels=24, n_blocks=2, n_layers=8, stft_weight=0.2, device=dev)
         mc.fit(tr, va, replace(train_cfg, seq_len=2048, batch_size=16, lr=3e-3, warmup=256))
         trained["circe"] = (to_inference_cpu(mc), True)
     except Exception as exc:

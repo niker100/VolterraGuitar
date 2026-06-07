@@ -139,6 +139,8 @@ class CIRCE(Model):
         cond_hidden: int = 16,
         dcblock_fc: float = 5.0,
         saturator: str = "clamp",
+        pre_emph: float = 0.0,
+        stft_weight: float = 0.1,
         device: str = "cpu",
     ) -> None:
         if saturator not in ("clamp", "adaa1", "adaa2"):
@@ -154,6 +156,11 @@ class CIRCE(Model):
         #: inference (cleaner harmonics at extreme drive); training keeps the clamp.
         self.saturator = saturator
         self._adaa_order = {"clamp": 0, "adaa1": 1, "adaa2": 2}[saturator]
+        #: Loss shaping (training only). ``pre_emph`` > 0 high-pass-weights the ESR
+        #: so high harmonics / sharp clipping transitions are actually fit (~0.85-
+        #: 0.95); ``stft_weight`` scales the multi-resolution STFT term.
+        self.pre_emph = float(pre_emph)
+        self.stft_weight = float(stft_weight)
         #: Output DC-blocker corner (Hz). A fixed 1-pole high-pass on the final
         #: output removes the drive-dependent DC offset the net learns (the real
         #: stages are AC-coupled), so zero input is silent. ``<=0`` disables it.
@@ -174,6 +181,8 @@ class CIRCE(Model):
             "cond_hidden": self.cond_hidden,
             "dcblock_fc": self.dcblock_fc,
             "saturator": self.saturator,
+            "pre_emph": self.pre_emph,
+            "stft_weight": self.stft_weight,
         }
 
     def _dc_ba(self) -> tuple[np.ndarray, np.ndarray]:
@@ -227,7 +236,9 @@ class CIRCE(Model):
                 sel = perm[i : i + cfg.batch_size]
                 pred = self.net(xb[sel], cb[sel])[:, warmup:]
                 tgt = yb[sel][:, warmup:]
-                loss = esr_loss(pred, tgt) + 0.1 * multi_stft_loss(pred, tgt)
+                loss = esr_loss(pred, tgt, pre_emph=self.pre_emph)
+                if self.stft_weight:
+                    loss = loss + self.stft_weight * multi_stft_loss(pred, tgt)
                 opt.zero_grad()
                 loss.backward()
                 opt.step()

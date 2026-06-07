@@ -96,6 +96,135 @@ def multi_stft(
     return float(np.mean(scores))
 
 
+def pre_emph_esr(y_true: np.ndarray, y_pred: np.ndarray, coef: float = 0.85) -> float:
+    """ESR after a first-order high-pass pre-emphasis ``y[n]-coef*y[n-1]``.
+
+    The perceptual, high-frequency-weighted error (Wright & Valimaki 2020). Plain
+    ESR is energy-weighted and dominated by the fundamental, so it hides a poor
+    match of the high harmonics / sharp clipping transitions; pre-emphasising both
+    signals first exposes exactly that mismatch. Lower is better.
+    """
+    a, b = _prep(y_true, y_pred)
+    pa, pb = a.copy(), b.copy()
+    pa[1:] = a[1:] - coef * a[:-1]
+    pb[1:] = b[1:] - coef * b[:-1]
+    return float(np.sum((pa - pb) ** 2) / (np.sum(pa**2) + _EPS))
+
+
+def _harmonic_levels_db(y: np.ndarray, sr: int, f0: float, n_harm: int) -> np.ndarray:
+    """Levels (dB) of harmonics 1..n_harm relative to the fundamental."""
+    y = np.asarray(y, dtype=np.float64).reshape(-1)
+    mag = np.abs(np.fft.rfft(y * np.hanning(len(y))))
+    n = len(y)
+    levels = np.full(n_harm, -120.0)
+    fund = 0.0
+    for k in range(1, n_harm + 1):
+        b = round(k * f0 * n / sr)
+        if b + 3 >= len(mag):
+            break
+        peak = float(mag[max(b - 3, 0) : b + 4].max())  # small window absorbs leakage
+        if k == 1:
+            fund = peak
+        levels[k - 1] = 20.0 * np.log10(peak / (fund + 1e-30) + 1e-12)
+    return levels
+
+
+def harmonic_level_error(
+    y_ref: np.ndarray, y_pred: np.ndarray, sr: int = 44_100, f0: float = 1000.0,
+    n_harm: int = 12, hi_from: int = 6,
+) -> tuple[float, float]:
+    """Mean-abs error (dB) of harmonic levels: ``(full, high-band)``.
+
+    ``y_ref``/``y_pred`` are the circuit's and the model's OUTPUT for the same
+    ``f0`` tone. Each signal's harmonic levels are taken relative to its own
+    fundamental, then compared. ``full`` averages harmonics 1..n_harm; ``high``
+    averages ``hi_from``..n_harm -- the high-order harmonics that carry the bright,
+    aggressive character of distortion and are the hardest to match. Lower better.
+    """
+    lr = _harmonic_levels_db(y_ref, sr, f0, n_harm)
+    lp = _harmonic_levels_db(y_pred, sr, f0, n_harm)
+    full = float(np.mean(np.abs(lr - lp)))
+    high = float(np.mean(np.abs(lr[hi_from - 1 :] - lp[hi_from - 1 :])))
+    return full, high
+
+
+def band_esr(
+    y_true: np.ndarray, y_pred: np.ndarray, sr: int = 44_100, f_lo: float = 4000.0,
+    f_hi: float | None = None, order: int = 4,
+) -> float:
+    """ESR within a frequency band (zero-phase Butterworth, no group-delay bias).
+
+    ``f_hi=None`` => high-pass above ``f_lo``; else band-pass ``[f_lo, f_hi]``.
+    Reporting this across bands ([0-2k],[2k-4k],[4k-8k],[8k-20k]) shows the
+    under-fit climbing with frequency — the time-domain readout of the HF miss.
+    """
+    from scipy.signal import butter, sosfiltfilt
+
+    a, b = _prep(y_true, y_pred)
+    nyq = sr / 2.0
+    if f_hi is None:
+        sos = butter(order, min(f_lo / nyq, 0.99), btype="highpass", output="sos")
+    else:
+        sos = butter(order, [f_lo / nyq, min(f_hi / nyq, 0.99)], btype="bandpass", output="sos")
+    af = sosfiltfilt(sos, a)
+    bf = sosfiltfilt(sos, b)
+    return float(np.sum((af - bf) ** 2) / (np.sum(af**2) + _EPS))
+
+
+def slew_weighted_esr(
+    y_true: np.ndarray, y_pred: np.ndarray, power: float = 1.0, smooth: int = 8
+) -> float:
+    """ESR weighted toward fast transitions (large |d/dt|) — the transient/edge error."""
+    a, b = _prep(y_true, y_pred)
+    d = np.abs(np.gradient(a))
+    if smooth > 1:
+        d = np.convolve(d, np.ones(smooth) / smooth, mode="same")
+    w = (d / (d.max() + _EPS)) ** power
+    return float(np.sum(w * (a - b) ** 2) / (np.sum(w * a**2) + _EPS))
+
+
+def knee_region_esr(
+    y_true: np.ndarray, y_pred: np.ndarray, lo: float = 0.7, hi: float = 1.0
+) -> float:
+    """ESR restricted to the saturated shoulder (``|y| in [lo,hi]*peak``) — clipping-edge error."""
+    a, b = _prep(y_true, y_pred)
+    peak = float(np.max(np.abs(a))) + _EPS
+    m = (np.abs(a) >= lo * peak) & (np.abs(a) <= hi * peak)
+    if not m.any():
+        return float("nan")
+    return float(np.sum((a[m] - b[m]) ** 2) / (np.sum(a[m] ** 2) + _EPS))
+
+
+def crest_factor_error_db(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """dB error of crest factor (peak/RMS). A model that rounds edges loses peaks => negative."""
+    a, b = _prep(y_true, y_pred)
+    cf = lambda z: float(np.max(np.abs(z))) / (float(np.sqrt(np.mean(z**2))) + _EPS)  # noqa: E731
+    return float(20.0 * np.log10((cf(b) + _EPS) / (cf(a) + _EPS)))
+
+
+def transfer_critical_error(
+    x_probe: np.ndarray, y_ref: np.ndarray, y_pred: np.ndarray
+) -> dict[str, float]:
+    """Transfer-curve error weighted toward the high-slope (knee) regions.
+
+    Drive a slow ramp/tone through circuit and model; ``x_probe`` is the input,
+    ``y_ref``/``y_pred`` the outputs. Weighting the RMSE by the local transfer
+    slope ``|dy_ref/dx|`` isolates the clipping knees. ``knee_weighted_rmse`` ≫
+    ``curve_rmse`` is the signature of "fits the linear region, misses the knee".
+    """
+    x = np.asarray(x_probe, dtype=np.float64).reshape(-1)
+    r, p = _prep(y_ref, y_pred)
+    dx = np.gradient(x)
+    slope = np.abs(np.gradient(r) / np.where(np.abs(dx) < _EPS, _EPS, dx))
+    w = slope / (slope.max() + _EPS)
+    err2 = (r - p) ** 2
+    return {
+        "curve_rmse": float(np.sqrt(np.mean(err2))),
+        "knee_weighted_rmse": float(np.sqrt(np.sum(w * err2) / (np.sum(w) + _EPS))),
+        "max_slope_err": float(np.sqrt(err2[np.argmax(slope)])),
+    }
+
+
 def thd(
     process: Callable[[np.ndarray], np.ndarray],
     f0: float = 1000.0,

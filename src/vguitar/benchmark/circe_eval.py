@@ -378,10 +378,11 @@ def _validate_one(
     retrain: bool = False,
     regen: bool = False,
     seg_dur_s: float = 2.0,
-    epochs: int = 80,
-    channels: int = 12,
+    epochs: int = 150,
+    channels: int = 24,
     n_blocks: int = 2,
-    n_layers: int = 7,
+    n_layers: int = 8,
+    stft_weight: float = 0.2,
     di_mix: float | None = None,
     probe_thd: bool = True,
     console: Any = None,
@@ -449,7 +450,7 @@ def _validate_one(
         dev = pick_device()
         console.print(f"[dim]training CIRCE on {dev} (inference on CPU)...[/]")
         model = CIRCE(n_control=n_control, channels=channels, n_blocks=n_blocks,
-                      n_layers=n_layers, device=dev)
+                      n_layers=n_layers, stft_weight=stft_weight, device=dev)
         report = model.fit(tr, va, TrainConfig(epochs=epochs, seq_len=2048, batch_size=16, lr=3e-3, warmup=256))
         model.save(model_path)
         hist_path.write_text(json.dumps(report.history))
@@ -483,8 +484,13 @@ def _validate_one(
         try:
             for r in rows:
                 g, params = _split_control(r["control"], specs)
-                r["thd_c"] = _thd_signal(simulate(circ, (g * tone).astype(np.float32), sr, params=params), sr)
-                r["thd_m"] = _thd_signal(model.process(tone, r["control"]), sr)
+                ct = simulate(circ, (g * tone).astype(np.float32), sr, params=params)
+                mt = model.process(tone, r["control"])
+                r["thd_c"] = _thd_signal(ct, sr)
+                r["thd_m"] = _thd_signal(mt, sr)
+                # High-harmonic level error (dB): harmonics 6-12 of the 1 kHz tone
+                # -- the bright, high-frequency content that makes the distortion.
+                _, r["harm_hi"] = metrics.harmonic_level_error(ct, mt, sr=sr, f0=1000.0)
         except Exception as exc:  # ngspice optional
             have_spice = False
             console.print(f"[yellow]ngspice unavailable; skipping tone/DI/heatmap probes ({exc})[/]")
@@ -531,10 +537,11 @@ def run_circe_eval(
     render: bool = True,
     heatmap: bool = True,
     seg_dur_s: float = 2.0,
-    epochs: int = 80,
-    channels: int = 12,
+    epochs: int = 150,
+    channels: int = 24,
     n_blocks: int = 2,
-    n_layers: int = 7,
+    n_layers: int = 8,
+    stft_weight: float = 0.2,
     di_mix: float | None = None,
 ) -> list[dict[str, Any]]:
     """Validate CIRCE on a circuit's control axes; print a report and write figures."""
@@ -549,8 +556,8 @@ def run_circe_eval(
     res = _validate_one(
         circuit_name, control_specs=control_specs, grid=grid, drives=drives, held=held,
         cfg=cfg, retrain=retrain, regen=regen, seg_dur_s=seg_dur_s, epochs=epochs,
-        channels=channels, n_blocks=n_blocks, n_layers=n_layers, di_mix=di_mix,
-        probe_thd=True, console=console,
+        channels=channels, n_blocks=n_blocks, n_layers=n_layers, stft_weight=stft_weight,
+        di_mix=di_mix, probe_thd=True, console=console,
     )
     from vguitar.circuits import get_circuit
     from vguitar.config import Config
@@ -580,6 +587,13 @@ def run_circe_eval(
     zero_str = ", ".join(
         f"[{','.join(f'{v:g}' for v in z['control'])}]:{z['dbfs']:.0f}dB" for z in stab["zero"]
     )
+    harm = [r["harm_hi"] for r in rows if "harm_hi" in r]
+    harm_str = (
+        f"[bold]high-harmonics[/] mean |err|={np.mean(harm):.1f} dB "
+        f"(harmonics 6-12 @1kHz; lower=brighter detail matched)\n"
+        if harm
+        else ""
+    )
     console.print(
         f"[bold]interpolation[/] trained ESR={interp['trained_mean']:.4f} | "
         f"held-out mean={interp['held_mean']:.4f} worst={interp['held_worst']:.4f} "
@@ -590,6 +604,7 @@ def run_circe_eval(
         f"[bold]stability[/] zero-input [{zero_str}]  "
         f"hot-input peak={stab['hot_offline_peak']:.2f}/{stab['hot_stream_peak']:.2f} "
         f"<= bound {stab['out_bound']:.2f} (finite={stab['hot_finite']})\n"
+        f"{harm_str}"
         f"params={res['params']:,}"
     )
 
