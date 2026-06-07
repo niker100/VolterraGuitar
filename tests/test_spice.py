@@ -118,3 +118,30 @@ def test_simulate_params_change_output() -> None:
     assert len(y_small) == len(x) and len(y_large) == len(x)
     # A 30x larger cap rolls off highs differently -> outputs must differ.
     assert not np.allclose(y_small, y_large, atol=1e-4)
+
+
+@pytest.mark.parametrize("circuit_name", ["jfet", "tube_screamer", "big_muff"])
+def test_complex_circuit_converges(circuit_name: str) -> None:
+    """Each complex circuit converges (finite, correct length) at default and at
+    the netlist-control extremes, driven near nominal."""
+    from vguitar.spice.runner import simulate
+
+    circ = get_circuit(circuit_name)
+    netlist_specs = [s for s in circ.controls if s.mode == "netlist"]
+    t = np.arange(int(0.02 * SR)) / SR
+    x = (float(circ.nominal_drive_v) * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
+
+    param_sets: list[dict[str, float] | None] = [None]  # defaults
+    param_sets.append({s.name: float(s.lo) for s in netlist_specs})  # all-low
+    param_sets.append({s.name: float(s.hi) for s in netlist_specs})  # all-high
+
+    outs = []
+    for params in param_sets:
+        y = simulate(circ, x, SR, params=params)
+        assert len(y) == len(x)
+        assert np.all(np.isfinite(y))
+        assert float(np.max(np.abs(y))) > 0.0  # the stage actually produces signal
+        outs.append(y)
+    # The control extremes must produce audibly different outputs.
+    if netlist_specs:
+        assert not np.allclose(outs[1], outs[2], atol=1e-4)

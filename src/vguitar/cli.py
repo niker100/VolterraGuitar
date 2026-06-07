@@ -267,6 +267,41 @@ def _toy_dataset(n: int = 6144, sr: int = 8000, seed: int = 0) -> Dataset:
     return Dataset(x, y, sr, name="selftest")
 
 
+def _toy_conditioned_dataset(n_seg: int = 2048, sr: int = 8000, seed: int = 0) -> Dataset:
+    """A conditioned variant of :func:`_toy_dataset` for conditioned models.
+
+    Two segments at different "drive" settings, each a ``tanh(g*x)`` soft-clip +
+    1-pole low-pass, so a conditioned model has a single control column to learn.
+    """
+    from scipy.signal import lfilter
+
+    from vguitar.data import Dataset
+
+    rng = np.random.default_rng(seed)
+    drives = [1.0, 3.0]
+    xs: list[np.ndarray] = []
+    ys: list[np.ndarray] = []
+    bounds: list[int] = [0]
+    vals: list[list[float]] = []
+    for g in drives:
+        x = (rng.standard_normal(n_seg) * 0.5).astype(np.float32)
+        y = lfilter([0.2], [1.0, -0.8], np.tanh(g * x)).astype(np.float32)
+        xs.append(x)
+        ys.append(y)
+        vals.append([g])
+        bounds.append(bounds[-1] + n_seg)
+    return Dataset.from_segments(
+        np.concatenate(xs),
+        np.concatenate(ys),
+        sr,
+        bounds,
+        np.asarray(vals, dtype=np.float32),
+        name="selftest_cond",
+        control_names=["drive"],
+        control_kinds=["continuous"],
+    )
+
+
 def _selftest_model(name: str, model_cls: type[Model], ds: Dataset) -> tuple[bool, str]:
     """Fit, streaming-check, and save/load a single model; return (ok, detail)."""
     import tempfile
@@ -295,16 +330,22 @@ def _selftest_model(name: str, model_cls: type[Model], ds: Dataset) -> tuple[boo
     return True, f"{model.num_params()} params"
 
 
-def _selftest_ngspice() -> tuple[str, bool, str]:
-    """0.05 s diode-clipper smoke test; reports PASS, SKIP (no ngspice), or FAIL."""
+def _selftest_circuit(circuit_name: str) -> tuple[str, bool, str]:
+    """0.05 s convergence smoke test for one circuit at its nominal drive.
+
+    Reports PASS, SKIP (ngspice DLL absent), or FAIL. Drives the circuit at
+    ``nominal_drive_v`` so a stage that actually clips is exercised; netlist-mode
+    controls use their declared defaults.
+    """
     from vguitar.circuits.base import get_circuit
     from vguitar.signals import sine
     from vguitar.spice import simulate
 
     sr = 44_100
-    x = sine(220.0, 0.05, sr, peak=0.7)
+    circuit = get_circuit(circuit_name)
+    x = sine(220.0, 0.05, sr, peak=float(circuit.nominal_drive_v))
     try:
-        y = simulate(get_circuit("diode"), x, sr)
+        y = simulate(circuit, x, sr)
     except RuntimeError as exc:  # ngspice DLL absent -> skip, not a failure
         return "SKIP", True, f"ngspice unavailable: {str(exc).splitlines()[0]}"
     except Exception as exc:
@@ -329,19 +370,24 @@ def cmd_selftest(args: argparse.Namespace, cfg: Config) -> int:
 
     all_ok = True
     ds = _toy_dataset()
+    ds_cond = _toy_conditioned_dataset()
     for name, model_cls in sorted(all_models().items()):
         try:
-            ok, detail = _selftest_model(name, model_cls, ds)
+            use_ds = ds_cond if model_cls.conditioned else ds
+            ok, detail = _selftest_model(name, model_cls, use_ds)
         except Exception as exc:
             ok, detail = False, f"{type(exc).__name__}: {exc}"
         status = "[green]PASS[/]" if ok else "[red]FAIL[/]"
         table.add_row(f"model:{name}", status, detail)
         all_ok = all_ok and ok
 
-    status_str, ng_ok, ng_detail = _selftest_ngspice()
-    color = {"PASS": "green", "SKIP": "yellow", "FAIL": "red"}[status_str]
-    table.add_row("ngspice:diode", f"[{color}]{status_str}[/]", ng_detail)
-    all_ok = all_ok and ng_ok
+    from vguitar.circuits.base import all_circuits
+
+    for circ_name in sorted(all_circuits()):
+        status_str, ng_ok, ng_detail = _selftest_circuit(circ_name)
+        color = {"PASS": "green", "SKIP": "yellow", "FAIL": "red"}[status_str]
+        table.add_row(f"ngspice:{circ_name}", f"[{color}]{status_str}[/]", ng_detail)
+        all_ok = all_ok and ng_ok
 
     console.print(table)
     return 0 if all_ok else 1
