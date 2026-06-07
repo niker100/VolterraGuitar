@@ -47,7 +47,7 @@ import numpy as np
 from vguitar.config import SimConfig
 
 if TYPE_CHECKING:
-    from vguitar.circuits.base import Circuit
+    from vguitar.circuits.base import Circuit, ControlSpec
     from vguitar.config import Config
     from vguitar.data import Dataset
 
@@ -64,15 +64,20 @@ def _import_error_message() -> str:
     )
 
 
-def _build_external_source_netlist(circuit: Circuit) -> str:
+def _build_external_source_netlist(
+    circuit: Circuit, params: dict[str, float] | None = None
+) -> str:
     """Return the circuit netlist with ``Vin`` turned into an external source.
 
     The base netlist declares the input exactly as ``Vin in 0 dc 0``. ngspice's
     external-source syntax is the trailing ``external`` keyword; with it, ngspice
     invokes ``get_vsrc_data`` (node name ``"vin"``) at every solver timestep.
     A title line is required by SPICE (the first line is always the title).
+
+    ``params`` selects netlist-mode control values (a tone cap, feedback resistor,
+    bias voltage, ...) via :meth:`Circuit.netlist_for`; ``None`` renders defaults.
     """
-    body = circuit.netlist()
+    body = circuit.netlist_for(params)
     new_body, n = _VIN_RE.subn("Vin in 0 dc 0 external", body)
     if n == 0:
         raise ValueError(
@@ -163,7 +168,14 @@ def _options_lines(cfg: SimConfig) -> str:
     )
 
 
-def simulate(circuit: Circuit, x: np.ndarray, sr: int, cfg: SimConfig | None = None) -> np.ndarray:
+def simulate(
+    circuit: Circuit,
+    x: np.ndarray,
+    sr: int,
+    cfg: SimConfig | None = None,
+    *,
+    params: dict[str, float] | None = None,
+) -> np.ndarray:
     """Run ``x`` (at ``sr``) through ``circuit`` in ngspice; return its output.
 
     The input is upsampled to ``cfg.sim_sr`` and streamed sample-by-sample into
@@ -176,6 +188,11 @@ def simulate(circuit: Circuit, x: np.ndarray, sr: int, cfg: SimConfig | None = N
         x: input signal in volts, shape ``(N,)``.
         sr: sample rate of ``x`` (and of the returned output).
         cfg: simulation settings; defaults to :class:`SimConfig`.
+        params: netlist-mode control values (e.g. a tone cap or feedback
+            resistor) substituted via :meth:`Circuit.netlist_for`; ``None``
+            renders the circuit's default netlist. Each combination is a fresh
+            ``load_circuit`` -- which is already the per-call cost model, so a
+            per-setting reload adds no measurable overhead over the ``.tran`` solve.
 
     Returns:
         The circuit output at node ``out``, float32, **exactly** ``len(x)``
@@ -203,7 +220,7 @@ def simulate(circuit: Circuit, x: np.ndarray, sr: int, cfg: SimConfig | None = N
     ng.set_input(xs, cfg.sim_sr)
 
     netlist = (
-        _build_external_source_netlist(circuit)
+        _build_external_source_netlist(circuit, params)
         + "\n"
         + _options_lines(cfg)
         # No 'uic': let ngspice solve the DC operating point first so a biased
@@ -281,6 +298,108 @@ def make_dataset(circuit: Circuit, cfg: Config) -> Dataset:
     )
 
 
+def make_control_dataset(
+    circuit: Circuit,
+    grid: np.ndarray,
+    control_specs: list[ControlSpec],
+    cfg: Config | None = None,
+    *,
+    seg_dur_s: float = 3.0,
+    seed: int = 0,
+    excitation: np.ndarray | None = None,
+    name: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> Dataset:
+    """Generate a CONDITIONED dataset over arbitrary control axes.
+
+    Each row of ``grid`` is one segment rendered at one fixed control setting.
+    Columns are split by their :class:`ControlSpec` ``mode``:
+
+    * ``pregain`` axes scale the input into the stage (the drive knob of a real
+      overdrive pedal). Several pregain axes multiply together.
+    * ``netlist`` axes substitute a value into the netlist via
+      :meth:`Circuit.netlist_for` (a tone cap, a feedback resistor, a bias).
+
+    For every row the model input is the *dry* excitation and the target is the
+    circuit's response to ``g_pregain * input`` under the row's netlist params.
+    The dense ``(N, C)`` control matrix records the raw control values so the
+    model conditions on them directly; interpolation to unseen settings is tested
+    by holding rows out of ``grid``.
+
+    Args:
+        circuit: circuit to characterize.
+        grid: ``(S, C)`` control rows (a ``(S,)`` vector is treated as one column).
+        control_specs: one :class:`ControlSpec` per column (length ``C``).
+        cfg: pipeline config (defaults to :class:`Config`).
+        seg_dur_s: duration of each per-setting excitation chunk.
+        seed: base RNG seed (offset per segment for distinct synthetic excitations).
+        excitation: optional shared unit-peak dry base used for *every* row
+            (e.g. a guitar DI loop); when ``None``, each row gets its own rich
+            synthetic excitation.
+        name, meta: dataset label / provenance (sensible defaults if omitted).
+
+    Returns:
+        A conditioned :class:`Dataset` with one control column per spec.
+    """
+    from dataclasses import replace
+
+    from vguitar.config import Config
+    from vguitar.data import Dataset
+    from vguitar.signals import build_training_excitation
+
+    grid = np.asarray(grid, dtype=np.float32)
+    if grid.ndim == 1:
+        grid = grid.reshape(-1, 1)
+    if grid.ndim != 2 or grid.shape[0] == 0:
+        raise ValueError(f"grid must be a non-empty (S, C) array, got shape {grid.shape}")
+    n_cols = grid.shape[1]
+    if len(control_specs) != n_cols:
+        raise ValueError(
+            f"control_specs has {len(control_specs)} entries but grid has {n_cols} columns"
+        )
+
+    cfg = cfg or Config()
+    sr = cfg.data.sr
+    pregain_idx = [i for i, s in enumerate(control_specs) if s.mode == "pregain"]
+    netlist_idx = [i for i, s in enumerate(control_specs) if s.mode == "netlist"]
+
+    xs: list[np.ndarray] = []
+    ys: list[np.ndarray] = []
+    bounds: list[int] = [0]
+    values: list[list[float]] = []
+    for j, row in enumerate(grid):
+        if excitation is not None:
+            base = np.asarray(excitation, dtype=np.float32).reshape(-1)
+        else:
+            # Unit-peak, content-rich dry excitation; the pregain axes do the scaling.
+            dcfg = replace(cfg.data, duration_s=seg_dur_s, drive_levels=(1.0,), seed=seed + j)
+            base = build_training_excitation(dcfg)
+        g = float(np.prod([row[i] for i in pregain_idx])) if pregain_idx else 1.0
+        params = {control_specs[i].name: float(row[i]) for i in netlist_idx} or None
+        y = simulate(circuit, (g * base).astype(np.float32), sr, cfg.sim, params=params)
+        xs.append(base)
+        ys.append(y)
+        values.append([float(v) for v in row])
+        bounds.append(bounds[-1] + len(base))
+
+    return Dataset.from_segments(
+        np.concatenate(xs),
+        np.concatenate(ys),
+        sr,
+        bounds,
+        np.asarray(values, dtype=np.float32),
+        name=name or f"{circuit.name}_ctl",
+        meta=meta
+        or {
+            "circuit": circuit.name,
+            "controls": [s.name for s in control_specs],
+            "modes": [s.mode for s in control_specs],
+        },
+        control_names=[s.name for s in control_specs],
+        control_kinds=[s.kind for s in control_specs],
+    )
+
+
 def make_drive_dataset(
     circuit: Circuit,
     drive_values: list[float],
@@ -291,13 +410,11 @@ def make_drive_dataset(
 ) -> Dataset:
     """Generate a CONDITIONED dataset for one continuous "drive" control.
 
-    The drive knob is modelled as a pre-gain into the stage (as in a real
-    overdrive pedal): the model input is the *dry* excitation; the target is the
-    circuit driven at ``g * input`` for each ``g`` in ``drive_values``. Each
-    drive value gets its own rich excitation chunk (different seed) so the model
-    must generalize over both input content and the knob. The control column is
-    the (raw) drive value ``g`` per segment; interpolation to unseen ``g`` is
-    tested by holding values out of ``drive_values``.
+    A thin wrapper over :func:`make_control_dataset` for the common single-axis
+    pre-gain case (a real overdrive pedal's drive knob): the model input is the
+    *dry* excitation; the target is the circuit driven at ``g * input`` for each
+    ``g`` in ``drive_values``. Interpolation to unseen ``g`` is tested by holding
+    values out of ``drive_values``.
 
     Args:
         circuit: circuit to characterize.
@@ -309,35 +426,25 @@ def make_drive_dataset(
     Returns:
         A conditioned :class:`Dataset` with a single ``"drive"`` control column.
     """
-    from dataclasses import replace
+    from vguitar.circuits.base import ControlSpec
 
-    from vguitar.config import Config
-    from vguitar.data import Dataset
-    from vguitar.signals import build_training_excitation
-
-    cfg = cfg or Config()
-    sr = cfg.data.sr
-    xs: list[np.ndarray] = []
-    ys: list[np.ndarray] = []
-    bounds: list[int] = [0]
-    values: list[list[float]] = []
-    for j, g in enumerate(drive_values):
-        # Unit-peak, content-rich dry excitation (single drive level; the knob does the scaling).
-        dcfg = replace(cfg.data, duration_s=seg_dur_s, drive_levels=(1.0,), seed=seed + j)
-        base = build_training_excitation(dcfg)
-        y = simulate(circuit, (float(g) * base).astype(np.float32), sr, cfg.sim)
-        xs.append(base)
-        ys.append(y)
-        values.append([float(g)])
-        bounds.append(bounds[-1] + len(base))
-    return Dataset.from_segments(
-        np.concatenate(xs),
-        np.concatenate(ys),
-        sr,
-        bounds,
-        np.asarray(values, dtype=np.float32),
+    drives = [float(g) for g in drive_values]
+    grid = np.asarray([[g] for g in drives], dtype=np.float32)
+    spec = ControlSpec(
+        name="drive",
+        kind="continuous",
+        lo=min(drives),
+        hi=max(drives),
+        default=drives[0],
+        mode="pregain",
+    )
+    return make_control_dataset(
+        circuit,
+        grid,
+        [spec],
+        cfg,
+        seg_dur_s=seg_dur_s,
+        seed=seed,
         name=f"{circuit.name}_drive",
-        meta={"circuit": circuit.name, "control": "drive", "drive_values": [float(g) for g in drive_values]},
-        control_names=["drive"],
-        control_kinds=["continuous"],
+        meta={"circuit": circuit.name, "control": "drive", "drive_values": drives},
     )

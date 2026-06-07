@@ -7,6 +7,19 @@ callback and captures the output.
 
 from __future__ import annotations
 
-from vguitar.spice.runner import make_dataset, simulate
+from vguitar.spice.runner import (
+    make_control_dataset,
+    make_dataset,
+    make_drive_dataset,
+    simulate,
+)
+from vguitar.spice.sampling import control_grid, holdout_grid
 
-__all__ = ["make_dataset", "simulate"]
+__all__ = [
+    "control_grid",
+    "holdout_grid",
+    "make_control_dataset",
+    "make_dataset",
+    "make_drive_dataset",
+    "simulate",
+]
