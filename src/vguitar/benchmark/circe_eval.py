@@ -140,8 +140,11 @@ def _stability_checks(model: CIRCE, control_rows: Any, sr: int = 44_100) -> dict
     rows = _as_control_rows(control_rows)
     out_bound = float(model.net.out_bound)
     probe = [rows[0], rows[len(rows) // 2], rows[-1]]
+    # Measure the steady-state tail (drop ~0.1 s) so the output DC-blocker's brief
+    # startup transient doesn't masquerade as idle noise.
+    w = sr // 10
     zero = [
-        {"control": c, "dbfs": _dbfs(model.process(np.zeros(sr, np.float32), c))} for c in probe
+        {"control": c, "dbfs": _dbfs(model.process(np.zeros(sr, np.float32), c)[w:])} for c in probe
     ]
     # hot input: 4x a unit-peak base, at the last (hottest) control row.
     hot = (4.0 * np.random.default_rng(0).standard_normal(sr)).astype(np.float32)
@@ -428,10 +431,12 @@ def _validate_one(
             make_control_dataset(circ, held_grid, specs, cfg, seg_dur_s=seg_dur_s, seed=100).save(test_path)
     train_ds, test_ds = Dataset.load(train_path), Dataset.load(test_path)
 
-    # --- model (cached); persist training history sidecar when we train ---
+    # --- model (cached or packaged); persist training history when we train ---
     model_path = cfg.paths.runs / f"{circuit_name}.circe.model"
+    packaged = cfg.paths.assets / "checkpoints" / f"{circuit_name}.circe.model"
     hist_path = cfg.paths.runs / f"{circuit_name}.circe.history.json"
-    if retrain or not model_path.exists():
+    load_path = model_path if model_path.exists() else (packaged if packaged.exists() else None)
+    if retrain or load_path is None:
         import torch
 
         torch.manual_seed(0)
@@ -442,7 +447,7 @@ def _validate_one(
         model.save(model_path)
         hist_path.write_text(json.dumps(report.history))
     else:
-        model = CIRCE.load(model_path)
+        model = CIRCE.load(load_path)
 
     # --- per-setting metrics from the cached datasets ---
     rows: list[dict[str, Any]] = []

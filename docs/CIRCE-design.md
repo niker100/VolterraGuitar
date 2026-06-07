@@ -309,7 +309,50 @@ ngspice parallelism**.
   `tests/test_circe_eval.py`. **Surfaced flaw:** zero-input is not silent at high drive (−6 dBFS at
   160 mV) — a drive-dependent DC offset (the real circuit is AC-coupled); cheap fix = a fixed output
   DC-blocker (1-pole high-pass), deferred.
-- **REMAINING (future):** GATE-4 (moving-control stability tests, dwell/slew), GATE-5 (ADAA +
-  alias-free fine-tune for the hard-clip extreme), GATE-6 (multi-stage + multi-control + active
-  learning, nonlinear-feedback gap). The core conditioned/interactive emulator is proven; these
-  extend robustness, anti-aliasing, and control dimensionality.
+### Roadmap to a finished project (M1–M9)
+
+A nine-milestone build extending the proven single-knob BJT result to a playable,
+multi-circuit, distributable emulator (each milestone: ruff+ty clean, tests green,
+a concrete deliverable):
+
+- **M1 — Parameterized netlists + multi-control generation.** `ControlSpec`
+  (`pregain` | `netlist` mode) + `Circuit.netlist_for(params)` (the two original
+  circuits unchanged); `simulate(..., params=)`; `make_control_dataset` generalizes
+  generation over N control axes; `spice/sampling.py` `control_grid` (factorial ≤2 /
+  Sobol ≥3, budget cap) + `holdout_grid`/`nn_distance` for honest off-grid points.
+- **M2 — Three complex circuits.** `jfet` (square-law, drive+tone), `tube_screamer`
+  (op-amp + in-loop feedback diodes, drive+tone), `big_muff` (cascaded clippers +
+  tone stack + level — first 3-control). All converge with the existing gear+gmin
+  options at default and control extremes (the op-amp/multi-stage convergence risk
+  retired). `selftest` now smoke-tests every circuit + every model (incl. CIRCE).
+- **M3 — Control-agnostic validation (GATE-4 generalized).** `circe_eval` rows carry
+  a control *vector*; helpers backward-compatible (scalar OR vector w/ normalized
+  NN-distance). `_validate_one` extracted as the quantitative core. Multi-control
+  figures: per-axis THD response slices + 2-D ESR heatmap; the 1-knob path is
+  unchanged. Verified on `tube_screamer` (streaming 3e-8, RTF 8×).
+- **M4 — Cross-circuit / multi-model comparison.** `vguitar validate` (`benchmark/
+  validate.py`) aggregates CIRCE across circuits → cross-circuit summary + circuit×
+  model ESR matrix (optional unconditioned baselines). New house-style builders.
+- **M5 — Output DC-blocker.** Fixed 1-pole ~20 Hz high-pass on the output
+  (`clip(DCblock(net), ±A)`): zero-input is now silent (the prior −6 dBFS offset is
+  gone) while staying strictly bounded; streaming stays bit-exact (lfilter `zi`).
+- **M6 — DI-mixed training + (mild) capacity bump.** A third of training segments
+  are real guitar-DI windows rendered through the circuit. **Real-DI ESR at 10 mV:
+  0.30 → 0.13.** The aggressive capacity bump (16ch/3blk) was rejected — RTF 1.3×
+  for ~no THD gain (per-layer Python-loop cost) — settled on 12ch/2blk (~2× RTF).
+- **M7 — ADAA output saturator (GATE-5, gated).** `saturator={"clamp"|"adaa1"|
+  "adaa2"}` (default clamp); ADAA hard-clip applied at inference only (training keeps
+  the differentiable clamp), streaming-exact for all three (`check_streaming` +
+  moving-control < 2e-3).
+- **M8 — Live interactive conditioned playback.** `LiveEngine(control_fn=…)` (alloc-
+  free per-block control) + `render_file(control=…)` (constant / schedule / callable);
+  `vguitar live --control "drive=0.08,tone=0.6"` and `--automation file.json`.
+- **M9 — Distributable polish.** Packaged checkpoint (`assets/checkpoints/`, load-if-
+  present in `circe`/`live`/`validate`), this model card, README quickstarts +
+  ngspice troubleshooting, reproducibility notes.
+
+- **REMAINING (future, GATE-6+):** alias-free teacher-student fine-tune; active
+  learning for >3 control axes; the nonlinear-feedback gap (feedforward cascades
+  provably can't represent it — benchmark measures it, fix deferred); dwell/slew
+  bounds under fast knob motion. The core conditioned/interactive emulator is proven
+  and playable across five circuits with 1–3 controls.

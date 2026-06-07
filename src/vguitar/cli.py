@@ -268,10 +268,14 @@ def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
 
     run = _run_path(cfg, args.circuit, args.model)
     if not run.exists():
-        return _fail(
-            f"no trained model at {run}; "
-            f"run 'vguitar train --circuit {args.circuit} --model {args.model}' first"
-        )
+        packaged = cfg.paths.assets / "checkpoints" / f"{args.circuit}.{args.model}.model"
+        if packaged.exists():
+            run = packaged
+        else:
+            return _fail(
+                f"no trained model at {run}; "
+                f"run 'vguitar train --circuit {args.circuit} --model {args.model}' first"
+            )
 
     try:
         model_cls = get_model(args.model)

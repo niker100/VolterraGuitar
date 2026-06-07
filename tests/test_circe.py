@@ -142,6 +142,20 @@ def test_interpolates_to_unseen_controls(trained: CIRCE) -> None:
         assert np.isfinite(e) and e < 0.6  # well below the ESR=1 trivial floor
 
 
+def test_packaged_bjt_checkpoint_loads() -> None:
+    """The shipped bjt checkpoint loads and runs (skipped if not packaged)."""
+    from pathlib import Path
+
+    p = Path("assets/checkpoints/bjt.circe.model")
+    if not p.exists():
+        pytest.skip("packaged bjt checkpoint not present")
+    m = CIRCE.load(p)
+    assert m.conditioned and m.n_control == 1
+    y = m.process(np.random.default_rng(0).standard_normal(2048).astype(np.float32),
+                  np.array([0.08], np.float32))
+    assert y.shape == (2048,) and np.all(np.isfinite(y))
+
+
 def test_requires_controls() -> None:
     rng = np.random.default_rng(0)
     plain = Dataset(rng.standard_normal(2000).astype(np.float32),
