@@ -353,6 +353,16 @@ a concrete deliverable):
   present in `circe`/`live`/`validate`), this model card, README quickstarts +
   ngspice troubleshooting, reproducibility notes.
 
+- **Cross-method shootout + GPU (post-M9).** `vguitar shootout` (`benchmark/
+  shootout.py`): a clean fixed-operating-point head-to-head — every method (fir,
+  volterra, volterra_pc, wh, tcn, rnn, CIRCE) on identical data/test per circuit,
+  with leaderboard + transfer/harmonic/waveform overlays + per-model A/B audio +
+  a circuit×model ESR matrix. On bjt/jfet/tube_screamer the feedforward neural
+  models (CIRCE, tcn) beat classical 2–8×; CIRCE is best-or-tied AND interactive.
+  Also: fixed an O(N²) blowup in volterra_pc identification (40 min→0.2 s),
+  lowered the DC-blocker to 5 Hz (transfer-plot artifact + low-band intrusion),
+  and added GPU training (`pick_device`/`to_inference_cpu`; CUDA torch on Windows;
+  ~16× CIRCE-fit speedup; inference/RTF stay CPU so numbers are device-independent).
 - **REMAINING (future, GATE-6+):** alias-free teacher-student fine-tune; active
   learning for >3 control axes; the nonlinear-feedback gap (feedforward cascades
   provably can't represent it — benchmark measures it, fix deferred); dwell/slew

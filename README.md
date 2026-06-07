@@ -76,7 +76,26 @@ real component changes rendered through a **parameterized netlist**
 `spice.runner.make_control_dataset` + `spice.sampling.control_grid` (full-factorial
 for ≤2 knobs, Sobol for ≥3).
 
-### Validate one circuit, or compare across all of them
+### Benchmark CIRCE against the other methods (the clean head-to-head)
+
+```bash
+uv run vguitar shootout --circuits diode,bjt,jfet,tube_screamer   # + audio + figures
+```
+
+`shootout` is the fixed-operating-point, apples-to-apples comparison: per circuit,
+**every** method (fir, volterra, volterra_pc, wh, tcn, rnn, CIRCE) trains and tests
+on the *same* data and the *same* held-out signal (same circuit input → same
+target; CIRCE additionally gets the operating point as a constant control, so
+ESR/THD are directly comparable). It writes a per-circuit **leaderboard** + ESR-vs-
+RTF scatter, **overlay figures** (static transfer, harmonic stack, waveform +
+residual — every model vs the circuit), per-model **A/B audio**
+(`outputs/audio/shootout/<circuit>/`), and a cross-circuit **ESR matrix** +
+`outputs/shootout.csv`. On the nonlinear circuits (bjt/jfet/tube_screamer) the
+feedforward neural models (CIRCE, tcn) beat classical Volterra/WH by 2–8×; CIRCE
+is best-or-tied while being real-time *and* the only interactive one. On the easy,
+near-memoryless diode, classical Volterra rightly wins.
+
+### Validate the CIRCE knob (its unique edge), one circuit or across all
 
 ```bash
 uv run vguitar circe --circuit tube_screamer        # train + validate (per-axis + 2-D figures)
@@ -86,8 +105,7 @@ uv run vguitar validate --circuits bjt,diode,jfet,tube_screamer,big_muff
 `circe` writes a report (per-setting ESR/THD, interpolation worst-case/p95,
 moving-knob streaming error, real-time factor, stability) plus house-style figures
 to `outputs/figs/` and A/B wavs to `outputs/audio/`. `validate` aggregates CIRCE
-across circuits into a cross-circuit summary and a circuit×model ESR matrix (add
-`--models circe,tcn,volterra` to include unconditioned baselines).
+across circuits into a cross-circuit summary and a circuit×model ESR matrix.
 
 ### Play it — turn the knobs live
 
@@ -113,6 +131,13 @@ offsets in dataset generation). Datasets and models are cached under `data/` and
 `runs/`; pass `--regen` to re-simulate or `--retrain` to refit. A single audio
 rate (`vguitar.AUDIO_SR`) is shared end-to-end (simulate → dataset → train → live)
 — the mismatch that broke v1.
+
+**GPU.** Neural training auto-uses CUDA when available (`models.base.pick_device`),
+then moves the model to the CPU for inference so streaming/RTF reflect the CPU
+deployment target (`to_inference_cpu`). On Windows the CUDA torch wheel is pulled
+via the `[tool.uv]` `pytorch-cu126` index; benchmark *numbers* are device-
+independent (a CIRCE fit is ~16× faster on an RTX 4090, but the results are the
+same). ngspice data generation is CPU-only (no GPU path).
 
 ## Dev
 

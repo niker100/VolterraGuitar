@@ -41,17 +41,35 @@ Trained settings 5–160 mV (clean→hard-clip) + 3 held-out; from `vguitar circ
 
 | metric | value |
 |---|---|
-| interpolation ESR | trained 0.095 · **held-out mean 0.145** · worst 0.206 · p95 0.198 |
-| vs best unconditioned real-time model | TCN 0.236 (CIRCE is more accurate **and** adds a live knob) |
-| streaming equivalence | constant 3.7e-6 · **moving-knob 2.0e-5** (turning it mid-stream is exact) |
-| real-time factor | **2.2× constant, 2.2× moving-knob** (conditioning ~free) |
-| idle (zero-input) | steady-state **≤ −140 dBFS** (DC-blocker; ~8 ms startup transient aside) |
+| interpolation ESR | trained 0.088 · **held-out mean 0.079** · worst 0.118 · p95 0.113 |
+| streaming equivalence | constant 1.4e-6 · **moving-knob 1.9e-6** (turning it mid-stream is exact) |
+| real-time factor | **~6.6× constant and moving-knob** (conditioning ~free; load-sensitive) |
+| idle (zero-input) | steady-state **−102…−128 dBFS** (5 Hz DC-blocker) |
 | hot input (4× amplitude) | **saturates** at the ±8.82 V bound (finite, offline = streamed) |
-| held-out real guitar-DI | ESR 0.06–0.10, 0.23 at the quietest 10 mV (was 0.30 before DI-mix) |
+| held-out real guitar-DI | ESR 0.02–0.06 (0.24 at the quietest 5 mV; was 0.30 before DI-mix) |
 
 Figures: `outputs/figs/bjt_circe_*.png` (ESR-by-drive, THD/peak/interp-vs-distance,
 knob harmonics & waveforms, training curve, drive×freq heatmap, held-out-DI
 compares); A/B wavs in `outputs/audio/`.
+
+### vs the other methods (fixed-point shootout)
+
+From `vguitar shootout` (every method on identical data/test at each circuit's
+nominal operating point; ESR, lower = better):
+
+| circuit | CIRCE | best baseline | classical best |
+|---|---|---|---|
+| diode (easy, memoryless) | 0.064 | tcn 0.012 / **volterra 0.009** | volterra 0.009 |
+| **bjt** | **0.092** | tcn 0.099 | volterra 0.217 |
+| **jfet** | **0.019** | tcn 0.051 | volterra 0.092 |
+| tube_screamer | 0.061 | **tcn 0.060** | volterra 0.162 |
+
+On the nonlinear circuits the feedforward neural models (CIRCE, tcn) beat classical
+Volterra/WH by 2–8×. A well-trained unconditioned TCN matches CIRCE's *fixed-point*
+accuracy — but CIRCE delivers it at 22.7k params, real-time, **and** with the live
+interpolatable knob the baselines structurally cannot provide (the interpolation
+table above is CIRCE's edge). On the easy near-memoryless diode, classical Volterra
+rightly wins. (Training auto-uses the GPU; inference/RTF stay on CPU.)
 
 ## Circuit roster
 
