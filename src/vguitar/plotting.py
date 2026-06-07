@@ -389,6 +389,32 @@ def fig_interp_vs_distance(dist: np.ndarray, esr_vals: np.ndarray, held_mask: np
     return fig
 
 
+def fig_control_esr_heatmap(vals_i: np.ndarray, vals_j: np.ndarray, esr_grid: np.ndarray,
+                            *, names: tuple[str, str] = ("c0", "c1"), name: str = "") -> Figure:
+    """ESR over a 2-D control plane (two knobs, others at default): the multi-
+    control analogue of the drive x frequency heatmap. ``esr_grid`` is
+    ``(len(vals_i), len(vals_j))`` ESR (lower = better), drawn on a log colour
+    scale (cividis = magnitude)."""
+    from matplotlib.colors import LogNorm
+
+    vi = np.asarray(vals_i, dtype=np.float64)
+    vj = np.asarray(vals_j, dtype=np.float64)
+    g = np.asarray(esr_grid, dtype=np.float64)
+    lo = max(float(np.nanmin(g[g > 0])) if np.any(g > 0) else 1e-3, 1e-4)
+    hi = max(float(np.nanmax(g)), lo * 1.001)
+    fig, ax = plt.subplots(figsize=(6.6, 5.0))
+    im = ax.imshow(g, aspect="auto", origin="lower", cmap=CMAP_MAG,
+                   norm=LogNorm(vmin=lo, vmax=hi),
+                   extent=(0.0, float(len(vj)), 0.0, float(len(vi))))
+    ax.set_xticks(np.arange(len(vj)) + 0.5, [f"{v:g}" for v in vj])
+    ax.set_yticks(np.arange(len(vi)) + 0.5, [f"{v:g}" for v in vi])
+    ax.set(xlabel=names[1], ylabel=names[0], title=f"{name} ESR over {names[0]} x {names[1]}")
+    ax.grid(False)
+    fig.colorbar(im, ax=ax, label="ESR")
+    fig.tight_layout()
+    return fig
+
+
 def fig_drive_freq_error(drives: np.ndarray, freqs: np.ndarray, err_db: np.ndarray,
                          *, control_name: str = "drive", name: str = "") -> Figure:
     """Heatmap of CIRCE-vs-circuit spectral error (dB) across control x frequency."""

@@ -14,8 +14,16 @@ import pytest
 import torch
 from scipy.signal import lfilter
 
-from vguitar.benchmark.circe_eval import _dbfs, _interp_stats, _rtf_moving, _stability_checks
+from vguitar.benchmark.circe_eval import (
+    _as_control_rows,
+    _dbfs,
+    _interp_stats,
+    _rtf_moving,
+    _split_control,
+    _stability_checks,
+)
 from vguitar.circuits import get_circuit
+from vguitar.circuits.base import ControlSpec
 from vguitar.config import Config, Paths, TrainConfig
 from vguitar.data import Dataset
 from vguitar.models.base import check_streaming_moving
@@ -107,6 +115,51 @@ def test_interp_stats_worstcase() -> None:
 def test_rtf_moving_runs(trained: CIRCE) -> None:
     r = _rtf_moving(trained, [0.5, 1.0, 2.0, 4.0], sr=SR, block=128, dur_s=0.5)
     assert np.isfinite(r["rtf"]) and r["rtf"] > 0
+
+
+# --- no-ngspice: multi-control (vector) helper paths -----------------------
+def test_as_control_rows_floats_and_vectors() -> None:
+    rows = _as_control_rows([0.5, 1.0, 2.0])
+    assert len(rows) == 3 and all(r.shape == (1,) for r in rows)
+    rows2 = _as_control_rows([[0.5, 0.1], [1.0, 0.9]])
+    assert len(rows2) == 2 and all(r.shape == (2,) for r in rows2)
+
+
+def test_split_control_pregain_and_netlist() -> None:
+    specs = [
+        ControlSpec("drive", "continuous", 0.0, 1.0, 0.2, "pregain"),
+        ControlSpec("tone", "continuous", 0.0, 1.0, 0.5, "netlist"),
+    ]
+    g, params = _split_control(np.array([0.4, 0.7]), specs)
+    assert g == pytest.approx(0.4)
+    assert params == {"tone": pytest.approx(0.7)}
+    # specs=None -> every column is a pre-gain (product), no netlist params.
+    g2, params2 = _split_control(np.array([0.4, 0.5]), None)
+    assert g2 == pytest.approx(0.2) and params2 is None
+
+
+def test_interp_stats_vector_path() -> None:
+    specs = [
+        ControlSpec("drive", "continuous", 0.0, 1.0, 0.2, "pregain"),
+        ControlSpec("tone", "continuous", 0.0, 1.0, 0.5, "netlist"),
+    ]
+    trained = np.array([[0.0, 0.0], [1.0, 1.0]], np.float32)
+    rows = [
+        {"control": np.array([0.0, 0.0], np.float32), "held": False, "esr": 0.10},
+        {"control": np.array([1.0, 1.0], np.float32), "held": False, "esr": 0.10},
+        {"control": np.array([0.5, 0.5], np.float32), "held": True, "esr": 0.30},
+    ]
+    s = _interp_stats(rows, trained, key=None, specs=specs)
+    assert s["held_worst"] == pytest.approx(0.30)
+    assert s["per_held"][0]["dist"] == pytest.approx(np.sqrt(0.5**2 + 0.5**2))
+    assert "control" in s["per_held"][0]
+
+
+def test_stability_checks_vector_rows(trained: CIRCE) -> None:
+    # The 1-control fixture still works when fed (S, 1) control rows.
+    stab = _stability_checks(trained, np.array([[0.5], [2.0], [4.0]], np.float32), sr=SR)
+    assert stab["hot_finite"]
+    assert len(stab["zero"]) == 3 and "control" in stab["zero"][0]
 
 
 # --- ngspice-gated: end-to-end pieces --------------------------------------
