@@ -106,6 +106,34 @@ def test_dcblock_disabled_passthrough() -> None:
     assert check_streaming(m, n=2048, block=64, atol=2e-3) < 2e-3
 
 
+def test_invalid_saturator_rejected() -> None:
+    with pytest.raises(ValueError, match="saturator"):
+        CIRCE(n_control=1, saturator="bogus")
+
+
+@pytest.mark.parametrize("saturator", ["clamp", "adaa1", "adaa2"])
+def test_saturator_streaming_exact_and_roundtrip(drive_ds: Dataset, tmp_path, saturator: str) -> None:
+    """Every output saturator keeps process == streamed process_block, and the
+    choice round-trips through save/load."""
+    torch.manual_seed(0)
+    tr, va, _ = drive_ds.split(0.15, 0.15)
+    m = CIRCE(n_control=1, channels=8, n_blocks=2, n_layers=5, saturator=saturator)
+    m.fit(tr, va, TrainConfig(epochs=4, seq_len=1024, batch_size=16, lr=3e-3, warmup=128))
+
+    assert check_streaming(m, n=4096, block=128, atol=2e-3) < 2e-3
+    from vguitar.models.base import check_streaming_moving
+
+    assert check_streaming_moving(m, n=4096, block=128, atol=2e-3) < 2e-3
+
+    path = tmp_path / f"circe_{saturator}.model"
+    m.save(path)
+    reloaded = CIRCE.load(path)
+    assert reloaded.saturator == saturator
+    x, _ = _seg(1.7, seed=7)
+    c = np.array([1.7], np.float32)
+    assert np.max(np.abs(m.process(x, c) - reloaded.process(x, c))) < 1e-5
+
+
 def test_interpolates_to_unseen_controls(trained: CIRCE) -> None:
     # g = 0.75 and 3.0 are NOT in the training grid [0.5, 1, 2, 4].
     for g in (0.75, 3.0):

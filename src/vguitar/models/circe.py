@@ -96,8 +96,8 @@ class _CIRCENet(nn.Module):
         beta = gb[:, :, 1, :]
         return gamma, beta
 
-    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """``x`` (B, T), ``c`` (B, K) -> (B, T)."""
+    def raw(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """Pre-saturator output ``(B, T)`` (everything up to the output stage)."""
         h = self.input(x.unsqueeze(1))  # (B, C, T)
         gamma, beta = self.film(c)
         skip = h.new_zeros(h.shape)
@@ -105,12 +105,19 @@ class _CIRCENet(nn.Module):
             h = gamma[:, i, :, None] * h + beta[:, i, :, None]  # FiLM before the layer
             h, s = layer(h)
             skip = skip + s
-        y = self.out(skip).squeeze(1)  # (B, T)
-        # Saturator of last resort: LINEAR within the trained range (so the
-        # network's own hard clipping is preserved), hard-limited only beyond
-        # +-out_bound (~1.2x the trained peak) for stability on extrapolation.
+        return self.out(skip).squeeze(1)  # (B, T)
+
+    def forward(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+        """``x`` (B, T), ``c`` (B, K) -> (B, T), with the clamp saturator.
+
+        Saturator of last resort: LINEAR within the trained range (so the
+        network's own hard clipping is preserved), hard-limited only beyond
+        +-out_bound (~1.2x the trained peak) for stability on extrapolation.
+        Training always uses this differentiable clamp; an ADAA output saturator
+        (if selected) replaces it at *inference* only (see :class:`CIRCE`).
+        """
         a = float(self.out_bound)
-        return torch.clamp(y, -a, a)
+        return torch.clamp(self.raw(x, c), -a, a)
 
 
 @register_model
@@ -131,14 +138,22 @@ class CIRCE(Model):
         kernel: int = 3,
         cond_hidden: int = 16,
         dcblock_fc: float = 20.0,
+        saturator: str = "clamp",
         device: str = "cpu",
     ) -> None:
+        if saturator not in ("clamp", "adaa1", "adaa2"):
+            raise ValueError(f"saturator must be 'clamp', 'adaa1' or 'adaa2', got {saturator!r}")
         self.n_control = n_control
         self.channels = channels
         self.n_blocks = n_blocks
         self.n_layers = n_layers
         self.kernel = kernel
         self.cond_hidden = cond_hidden
+        #: Output saturator. ``"clamp"`` = hard clip (default, what training uses).
+        #: ``"adaa1"``/``"adaa2"`` = antiderivative-antialiased hard clip applied at
+        #: inference (cleaner harmonics at extreme drive); training keeps the clamp.
+        self.saturator = saturator
+        self._adaa_order = {"clamp": 0, "adaa1": 1, "adaa2": 2}[saturator]
         #: Output DC-blocker corner (Hz). A fixed 1-pole high-pass on the final
         #: output removes the drive-dependent DC offset the net learns (the real
         #: stages are AC-coupled), so zero input is silent. ``<=0`` disables it.
@@ -158,6 +173,7 @@ class CIRCE(Model):
             "kernel": self.kernel,
             "cond_hidden": self.cond_hidden,
             "dcblock_fc": self.dcblock_fc,
+            "saturator": self.saturator,
         }
 
     def _dc_ba(self) -> tuple[np.ndarray, np.ndarray]:
@@ -270,16 +286,19 @@ class CIRCE(Model):
         self.net.eval()
         xv = np.ascontiguousarray(x, dtype=np.float32).reshape(-1)
         cv = self._control_vec(c)
+        bound = float(self.net.out_bound)
         with torch.no_grad():
             xt = torch.from_numpy(xv).to(self.device).view(1, -1)
             ct = torch.from_numpy(cv).to(self.device).view(1, -1)
-            y = self.net(xt, ct).view(-1)
-        yn = y.cpu().numpy().astype(np.float32)
+            if self._adaa_order == 0:
+                yn = self.net(xt, ct).view(-1).cpu().numpy().astype(np.float32)
+            else:
+                raw = self.net.raw(xt, ct).view(-1).cpu().numpy().astype(np.float32)
+                yn = self._saturate(raw, bound, self._make_adaa())
         if self.dcblock_fc > 0.0:
             from scipy.signal import lfilter
 
             b, a = self._dc_ba()
-            bound = float(self.net.out_bound)
             # DC-block then re-clamp: removes the offset *and* keeps the strict
             # output bound (the high-pass can otherwise overshoot sharp edges).
             yn = np.clip(lfilter(b, a, yn), -bound, bound).astype(np.float32)
@@ -338,7 +357,29 @@ class CIRCE(Model):
             "dc_on": self.dcblock_fc > 0.0,
             "dc_ba": self._dc_ba(),
             "dc_zi": np.zeros(1, dtype=np.float64),
+            # ADAA output saturator (None => plain clamp). Its internal state is
+            # carried block-to-block, matching the offline pass exactly.
+            "adaa": self._make_adaa(),
         }
+
+    def _make_adaa(self) -> Any:
+        """An ADAAProcessor for the hard-clip output saturator (or ``None``)."""
+        if self._adaa_order == 0:
+            return None
+        from vguitar.nonlinear.adaa import HARDCLIP, ADAAProcessor
+
+        return ADAAProcessor(HARDCLIP, order=self._adaa_order)
+
+    def _saturate(self, raw: np.ndarray, bound: float, proc: Any) -> np.ndarray:
+        """Apply the output saturator to a raw block: plain clamp or ADAA hard-clip.
+
+        ``A * hardclip(raw/A)`` equals ``clamp(raw, +-A)``; the ADAA form replaces
+        the pointwise hard clip with its antiderivative-antialiased average, which
+        suppresses the aliasing the hard knee creates at extreme drive.
+        """
+        if proc is None:
+            return np.clip(raw, -bound, bound).astype(np.float32)
+        return (bound * proc.process_block(raw / bound)).astype(np.float32)
 
     def _film_np(self, s: dict[str, Any], c: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Numpy FiLM: control -> per-layer (gamma, beta), each (n_lyr, C)."""
@@ -378,7 +419,7 @@ class CIRCE(Model):
         o = np.maximum(s["o1w"] @ o + s["o1b"][:, None], 0.0)
         o = s["o3w"] @ o + s["o3b"][:, None]
         a = s["out_bound"]
-        out = np.clip(o[0], -a, a).astype(np.float32)
+        out = self._saturate(o[0], a, s["adaa"])
         if s["dc_on"]:
             from scipy.signal import lfilter
 
