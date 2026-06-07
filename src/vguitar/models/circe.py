@@ -130,6 +130,7 @@ class CIRCE(Model):
         n_layers: int = 7,
         kernel: int = 3,
         cond_hidden: int = 16,
+        dcblock_fc: float = 20.0,
         device: str = "cpu",
     ) -> None:
         self.n_control = n_control
@@ -138,13 +139,17 @@ class CIRCE(Model):
         self.n_layers = n_layers
         self.kernel = kernel
         self.cond_hidden = cond_hidden
+        #: Output DC-blocker corner (Hz). A fixed 1-pole high-pass on the final
+        #: output removes the drive-dependent DC offset the net learns (the real
+        #: stages are AC-coupled), so zero input is silent. ``<=0`` disables it.
+        self.dcblock_fc = float(dcblock_fc)
         self.device = torch.device(device)
         self.net = _CIRCENet(channels, n_blocks, n_layers, kernel, n_control, cond_hidden).to(
             self.device
         )
         self._stream: dict[str, Any] | None = None
 
-    def _hparams(self) -> dict[str, int]:
+    def _hparams(self) -> dict[str, Any]:
         return {
             "n_control": self.n_control,
             "channels": self.channels,
@@ -152,7 +157,21 @@ class CIRCE(Model):
             "n_layers": self.n_layers,
             "kernel": self.kernel,
             "cond_hidden": self.cond_hidden,
+            "dcblock_fc": self.dcblock_fc,
         }
+
+    def _dc_ba(self) -> tuple[np.ndarray, np.ndarray]:
+        """1-pole DC-blocker coefficients ``(b, a)`` at the canonical audio rate.
+
+        ``H(z) = (1 - z^-1) / (1 - R z^-1)`` with ``R = exp(-2*pi*fc/sr)``: unity
+        DC rejection, ~unity passband. The same fixed filter is applied to the
+        offline output (zero initial state) and streamed block-by-block (state
+        carried via ``lfilter`` ``zi``), so the two paths stay bit-for-bit equal.
+        """
+        from vguitar import AUDIO_SR
+
+        r = float(np.exp(-2.0 * np.pi * self.dcblock_fc / AUDIO_SR))
+        return np.array([1.0, -1.0], dtype=np.float64), np.array([1.0, -r], dtype=np.float64)
 
     # --- learning ---------------------------------------------------------
     def fit(
@@ -255,7 +274,16 @@ class CIRCE(Model):
             xt = torch.from_numpy(xv).to(self.device).view(1, -1)
             ct = torch.from_numpy(cv).to(self.device).view(1, -1)
             y = self.net(xt, ct).view(-1)
-        return y.cpu().numpy().astype(np.float32)
+        yn = y.cpu().numpy().astype(np.float32)
+        if self.dcblock_fc > 0.0:
+            from scipy.signal import lfilter
+
+            b, a = self._dc_ba()
+            bound = float(self.net.out_bound)
+            # DC-block then re-clamp: removes the offset *and* keeps the strict
+            # output bound (the high-pass can otherwise overshoot sharp edges).
+            yn = np.clip(lfilter(b, a, yn), -bound, bound).astype(np.float32)
+        return yn
 
     def _control_vec(self, c: np.ndarray | None) -> np.ndarray:
         if c is None:
@@ -305,6 +333,11 @@ class CIRCE(Model):
             "c_std": sd["c_std"],
             "out_bound": float(sd["out_bound"]),
             "buf": [np.zeros((c, (self.kernel - 1) * d), dtype=np.float32) for d in dil],
+            # DC-blocker state (carried across blocks via lfilter zi; zero init
+            # matches the offline zero-IC filtering exactly).
+            "dc_on": self.dcblock_fc > 0.0,
+            "dc_ba": self._dc_ba(),
+            "dc_zi": np.zeros(1, dtype=np.float64),
         }
 
     def _film_np(self, s: dict[str, Any], c: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -345,7 +378,14 @@ class CIRCE(Model):
         o = np.maximum(s["o1w"] @ o + s["o1b"][:, None], 0.0)
         o = s["o3w"] @ o + s["o3b"][:, None]
         a = s["out_bound"]
-        return np.clip(o[0], -a, a).astype(np.float32)
+        out = np.clip(o[0], -a, a).astype(np.float32)
+        if s["dc_on"]:
+            from scipy.signal import lfilter
+
+            b, av = s["dc_ba"]
+            filtered, s["dc_zi"] = lfilter(b, av, out, zi=s["dc_zi"])
+            out = np.clip(filtered, -a, a).astype(np.float32)
+        return out
 
     # --- persistence ------------------------------------------------------
     def save(self, path: str | Path) -> None:

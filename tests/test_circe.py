@@ -67,9 +67,43 @@ def test_save_load_roundtrip(trained: CIRCE, tmp_path) -> None:
     path = tmp_path / "circe.model"
     trained.save(path)
     reloaded = CIRCE.load(path)
+    assert reloaded.dcblock_fc == trained.dcblock_fc  # hparam persisted
     x, _ = _seg(1.7, seed=7)
     c = np.array([1.7], np.float32)
     assert np.max(np.abs(trained.process(x, c) - reloaded.process(x, c))) < 1e-5
+
+
+def test_dcblock_silences_zero_input(trained: CIRCE) -> None:
+    """With the DC-blocker on, zero input is silent even at the hottest control
+    (the drive-dependent DC offset is removed)."""
+    assert trained.dcblock_fc > 0.0
+    c = np.array([4.0], np.float32)
+    y = trained.process(np.zeros(SR, np.float32), c)
+    # After the ~1/fc settling transient the output is essentially zero.
+    tail = y[SR // 2 :]
+    assert float(np.sqrt(np.mean(tail**2))) < 1e-3
+
+
+def test_dcblock_streaming_still_exact(trained: CIRCE) -> None:
+    # The DC-blocker is applied identically offline (zero IC) and streamed (zi),
+    # so process == streamed process_block still holds with it enabled.
+    assert check_streaming(trained, n=4096, block=128, atol=2e-3) < 2e-3
+    x, _ = _seg(2.5, seed=11)
+    c = np.array([2.5], np.float32)
+    trained.reset()
+    y_off = trained.process(x, c)
+    trained.reset()
+    y_st = np.concatenate([trained.process_block(x[i : i + 96], c) for i in range(0, len(x), 96)])
+    assert np.max(np.abs(y_off - y_st[: len(x)])) < 2e-3
+
+
+def test_dcblock_disabled_passthrough() -> None:
+    # fc<=0 disables the DC-blocker (ablation / back-compat path).
+    m = CIRCE(n_control=1, channels=6, n_blocks=1, n_layers=4, dcblock_fc=0.0)
+    x = np.random.default_rng(0).standard_normal(512).astype(np.float32)
+    c = np.array([1.0], np.float32)
+    assert np.all(np.isfinite(m.process(x, c)))
+    assert check_streaming(m, n=2048, block=64, atol=2e-3) < 2e-3
 
 
 def test_interpolates_to_unseen_controls(trained: CIRCE) -> None:
