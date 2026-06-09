@@ -345,6 +345,48 @@ def fig_sota_campaign(name: str, data: dict[str, Any]) -> None:
     _save(fig, f"sota_{name}")
 
 
+def _is_campaign(data: dict[str, Any]) -> bool:
+    """Campaign JSON = {label: {circuit: {"held": [list], ...}}}; a lever-probe JSON
+    is {circuit: {"kind": str, <tag>: {"held": float}}} (first value is a str)."""
+    try:
+        cfg = next(iter(data.values()))
+        circ = next(iter(cfg.values()))
+        return isinstance(circ, dict) and isinstance(circ.get("held"), list)
+    except (StopIteration, AttributeError, TypeError):
+        return False
+
+
+def fig_lever_ab(name: str, data: dict[str, Any]) -> None:
+    """Grouped held-ESR bars for a lever prototype A/B ({circuit: {kind, off:{held},
+    on:{held}}}): off vs on per circuit, log-y, 0.005 target, % delta annotations."""
+    circuits = list(data)
+    tags = [k for k in data[circuits[0]] if k != "kind"]
+    if len(tags) != 2:
+        return
+    off, on = tags
+    base = np.array([data[c][off]["held"] for c in circuits])
+    var = np.array([data[c][on]["held"] for c in circuits])
+    x = np.arange(len(circuits))
+    w = 0.38
+    fig, ax = plt.subplots(figsize=(max(6.0, 1.4 * len(circuits)), 3.8))
+    ax.bar(x - w / 2, base, w, label=off, color=OKABE_ITO["gray"], edgecolor="black",
+           linewidth=0.4)
+    ax.bar(x + w / 2, var, w, label=on, color=OKABE_ITO["blue"], edgecolor="black", linewidth=0.4)
+    for xi, b, v in zip(x, base, var, strict=True):
+        d = 100.0 * (v - b) / b if b else 0.0
+        ax.text(xi + w / 2, v, f"{d:+.0f}%", ha="center", va="bottom", fontsize=7)
+    ax.axhline(0.005, ls="--", color=OKABE_ITO["black"], lw=1.2)
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{c}\n[{data[c].get('kind', '')}]" for c in circuits], fontsize=8)
+    ax.set_ylabel("held-out ESR (log) — lower better")
+    ax.set_title(f"Lever probe '{name}': {off} vs {on} (OS1 prototype; delta = on vs off)",
+                 fontsize=9)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _save(fig, f"lever_{name}")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -352,9 +394,14 @@ def main() -> None:
     if sota_dir.exists():
         for p in sorted(sota_dir.glob("*.json")):
             data = json.loads(p.read_text())
-            if data:
+            if not data:
+                continue
+            if _is_campaign(data):
                 fig_sota_campaign(p.stem, data)
                 made.append(f"sota_{p.stem}")
+            else:
+                fig_lever_ab(p.stem, data)
+                made.append(f"lever_{p.stem}")
     if fig_wavefolder_frontier():
         made.append("wavefolder_frontier")
     mvg = _load("mixed_vs_gated_final")

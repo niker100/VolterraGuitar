@@ -186,3 +186,23 @@ complementary log-spectral/harmonic-match metric rather than gating on 0.005.
 
 2/9 under 0.005. Next: rank-2 IIR (running) for hysteretic; rank-3 learnable corners
 for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
+
+- **2026-06-09 — Campaign 3 RESULT: IIR memory lever WORKS (directionally).** OS1
+  prototype A/B (state on/off): hysteretic_fuzz 0.0495→0.0353 (**−29%**), crossover
+  0.0716→0.0587 (**−18%**), bjt 0.0296→0.0291 (−2%, smooth guard neutral). The
+  shallow-OS1 prototype's absolute ESR is inflated vs production, so these are
+  directional "integrate it" signals — true magnitudes come post-integration at
+  OS2/nb2. −29% alone won't crack hysteretic; levers must stack. Fig: `lever_iir_probe`.
+- **2026-06-09 — Campaign 4 (`corner_probe`)** launched (GPU): learnable-threshold
+  corners on/off on hard_clipper + crossover + bjt. Gates the circe3.py integration.
+- **2026-06-09 — Data-quality track (`regen_data`)** launched (CPU/ngspice, parallel —
+  no GPU contention): regenerate the 6 unsolved/near-miss training sweeps at
+  seg_dur_s=8 (~3× data, the audited 41% volume deficit) to `*_v2.npz`, **test sets
+  unchanged** so held-ESR stays comparable. A follow-up campaign trains on _v2.
+- **Integration plan (next):** once corners are confirmed, add to `circe3.py` as
+  default-off uniform flags — `n_state` (K learnable one-pole channels, numpy
+  streaming twin = carried one-pole recurrence, bit-exact by construction) and
+  learnable `rect_thr` (replacing the dead fixed bank) — with a streaming-exactness
+  test + save/load round-trip. Then a production-config (OS2/nb2/dcblock_off)
+  combined campaign: baseline vs +IIR vs +corners vs +both vs +depth, multi-seed,
+  with the smooth circuits as regression guards.
