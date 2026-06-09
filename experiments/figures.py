@@ -231,6 +231,39 @@ def fig_spectral_only(so: dict[str, Any]) -> None:
     _save(fig, "spectral_only")
 
 
+def fig_spectral_zoo(zoo: dict[str, Any]) -> None:
+    """The spectral-operator zoo: bjt-ESR vs jfet-ESR (log-log) — baselines starred,
+    the 'good corner' is bottom-left. Shows the wins are circuit-split and no variant
+    beats the time+spectral hybrid on both. Point size ~ params."""
+    res = zoo["results"]
+    params = zoo.get("params", {})
+    tags = [t for t in res if "bjt" in res[t] and "jfet" in res[t]]
+    bjt = np.array([res[t]["bjt"].get("esr", np.nan) for t in tags])
+    jf = np.array([res[t]["jfet"].get("esr", np.nan) for t in tags])
+    # clip failures (ESR ~1) to the plot edge so they don't blow the axes
+    bjt = np.clip(np.nan_to_num(bjt, nan=1.2), 1e-3, 1.2)
+    jf = np.clip(np.nan_to_num(jf, nan=1.2), 1e-3, 1.2)
+    sz = np.array([max(params.get(t, 1e4), 5e3) / 600 for t in tags])
+    fig, ax = plt.subplots(figsize=(7.5, 5.5))
+    for t, x, y, s in zip(tags, bjt, jf, sz, strict=True):
+        base = t in ("hybrid", "time_only")
+        ax.scatter(x, y, s=s if not base else 180, marker="*" if base else "o",
+                   color=OKABE_ITO["purple"] if base else OKABE_ITO["sky"],
+                   edgecolor="black", linewidth=0.5, zorder=3)
+        ax.annotate(t, (x, y), fontsize=7, xytext=(4, 3), textcoords="offset points")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("bjt held-ESR (strong distortion) — lower better")
+    ax.set_ylabel("jfet held-ESR (mild) — lower better")
+    ax.set_title("Spectral-operator zoo: wins are circuit-split; none beats the\n"
+                 "time+spectral hybrid on both (stars=baselines, circles=variants, size~params)",
+                 fontsize=9)
+    ax.axhline(res["hybrid"]["jfet"]["esr"], ls=":", color=OKABE_ITO["purple"], lw=1, alpha=0.5)
+    ax.axvline(res["hybrid"]["bjt"]["esr"], ls=":", color=OKABE_ITO["purple"], lw=1, alpha=0.5)
+    fig.tight_layout()
+    _save(fig, "spectral_zoo")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -271,6 +304,10 @@ def main() -> None:
     if so:
         fig_spectral_only(so)
         made.append("spectral_only")
+    zoo = _load("spectral_zoo")
+    if zoo:
+        fig_spectral_zoo(zoo)
+        made.append("spectral_zoo")
     print(f"generated {len(made)} figures: {', '.join(made) or '(none — no JSONs yet)'}", flush=True)
 
 

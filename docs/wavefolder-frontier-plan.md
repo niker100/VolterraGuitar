@@ -345,3 +345,39 @@ BUT its jfet `band>4k` = 0.013 *beats* time-only's 0.018 — so it genuinely nai
 **formant envelope** even alone, just not the waveform/harmonics. Clean proof of the
 division of labour: **time head = harmonic generation, spectral branch = linear
 formant shaping, hybrid = both.** Figure: `spectral_only.png`.
+
+### Step 3b RESULT — the spectral-operator ZOO (9 variants, parallel search)
+
+A 10-agent ultracode Workflow implemented 9 conceptually-distinct
+spectral-operator architectures (`experiments/spectral_zoo/`) — all keeping
+time-domain nonlinearities (harmonics) while doing linear mixing as cheap spectral
+multiplies (the user's efficiency goal) — trained head-to-head
+(`experiments/spectral_zoo_run.py`, 150ep OS1) vs the time-only TCN and
+time+spectral hybrid baselines on bjt(strong)+jfet(mild):
+
+| model | bjt | jfet | params | note |
+|---|---|---|---|---|
+| **hybrid** (baseline) | **0.0216** | **0.0091** | 53k | best overall |
+| time_only (baseline) | 0.0298 | 0.0098 | 27k | |
+| **stft_mix** | **0.0187** | 0.0568 | **24.5k** | *best bjt in the table*, cheapest; bad jfet |
+| **fft_longfir** | 0.0485 | **0.0047** | 51k | *best jfet*; worse bjt; ~85× rtf |
+| global_filter (literal idea) | 0.0326 | 0.0102 | 28k | works, ~time_only level |
+| learned_transform | 0.085 | 0.065 | 35k | worse |
+| tcn_spectral_interleave | 0.089 | 0.055 | 45k | worse + NOT real-time (0.4×) |
+| recurrent_spectral | 0.137 | 0.057 | 38k | the memory variant — underperformed |
+| fno1d | 0.38 | 1.00 | 86k | **FAILED** (low-mode truncation) |
+| afno | 1.00 | 0.98 | 13k | **FAILED** (nonlinearity in frequency) |
+| wavelet | — | — | — | crashed (cuda/cpu device bug, no data) |
+
+**Verdict: the concept is VIABLE but does not yet beat the hybrid universally.**
+`global_filter`/`stft_mix`/`fft_longfir` are all sensible, and two **beat the hybrid
+on one circuit each at low cost** — but the wins are **circuit-split**, not
+universal. Instructive failures: putting the nonlinearity *in frequency* (`afno`)
+or truncating to *low modes* (`fno1d`) destroys harmonic generation → full-bandwidth
+**time-domain** nonlinearity is essential (re-confirms the FFT-only lesson). Figure:
+`spectral_zoo.png`. **Standout lead: `stft_mix`** — best-bjt (beats the hybrid) at
+the *fewest* params (24.5k, < half the hybrid), excellent formant band (0.012); its
+only weakness is jfet. If that's a fixable instability (single-seed), it's a
+**cheaper-than-hybrid** architecture serving the efficiency goal → deep-dive next
+(multi-seed × bjt/jfet/tube_screamer). The `wavelet` device bug is a quick fix worth
+re-running (tiny, 6.7k params).
