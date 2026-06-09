@@ -37,7 +37,7 @@ from vguitar.models.tcn import _MixedLayer
 
 DEVICE = "cuda"
 CHANNELS, N_LAYERS, FEAT_DIM, KERNEL = 24, 9, 512, 3
-N_OUTER, EPOCHS_PER = 15, 10  # 150 total backprop epochs (matches the standard baseline)
+EPOCHS = 150
 SEQ_LEN, WARMUP, BATCH, LR, RIDGE = 4096, 2048, 24, 3e-3, 1e-2
 CHUNK = 65536
 CIRCUITS = ["bjt", "jfet", "tube_screamer", "crossover", "hard_clipper"]
@@ -141,42 +141,57 @@ def _windows(segs, device: str):
             torch.from_numpy(np.concatenate(ys)).to(device))
 
 
+def _solve_diff(f: torch.Tensor, y: torch.Tensor, ridge: float, warmup: int
+                ) -> torch.Tensor:
+    """Differentiable per-minibatch ridge readout (Golub-Pereyra VarPro). ``f`` (B,F,T),
+    ``y`` (B,T) -> raw prediction on [warmup:] (B, Tw). W = (HH^T+λI)^-1 H y is solved
+    INSIDE the graph, so the trunk gradient accounts for W's optimal dependence on the
+    features (stable, unlike freezing W). The batch (B*Tw >> F) determines W well."""
+    bsz, feat, _ = f.shape
+    ones = torch.ones(bsz, 1, f.shape[2], device=f.device)
+    fb = torch.cat([f, ones], 1)[:, :, warmup:]  # (B, F+1, Tw)
+    hcols = fb.permute(1, 0, 2).reshape(feat + 1, -1)  # (F+1, B*Tw)
+    yt = y[:, warmup:].reshape(-1)  # (B*Tw,)
+    a = hcols @ hcols.T + ridge * torch.eye(feat + 1, device=f.device)
+    w = torch.linalg.solve(a, hcols @ yt)  # (F+1,)
+    return (w @ hcols).reshape(bsz, -1)  # (B, Tw)
+
+
 def train(net: VarProNet, segs, device: str, varpro: bool, log) -> None:
     net.to(device)
     net.out_bound.copy_(torch.tensor(1.2 * max(float(np.max(np.abs(y))) for _, y in segs) + 1e-6))
     xb, yb = _windows(segs, device)
-    params = [p for n, p in net.named_parameters() if "readout" not in n or not varpro]
+    params = list(net.parameters())
     opt = torch.optim.Adam(params, lr=LR)
-    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=N_OUTER * EPOCHS_PER,
-                                                       eta_min=LR * 0.01)
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=EPOCHS, eta_min=LR * 0.01)
     gen = torch.Generator().manual_seed(0)
-    for _ in range(N_OUTER):
-        if varpro:
-            net.eval()
-            net.W.copy_(solve_W(net, segs, device))  # closed-form readout (trunk frozen)
+    for _ in range(EPOCHS):
         net.train()
-        for _ep in range(EPOCHS_PER):
-            perm = torch.randperm(xb.shape[0], generator=gen)
-            for i in range(0, len(perm), BATCH):
-                sel = perm[i:i + BATCH]
+        perm = torch.randperm(xb.shape[0], generator=gen)
+        for i in range(0, len(perm), BATCH):
+            sel = perm[i:i + BATCH]
+            tgt = yb[sel][:, WARMUP:]
+            if varpro:  # differentiable closed-form readout each step
+                pred = _solve_diff(net.features(xb[sel]), yb[sel], RIDGE, WARMUP)
+            else:  # standard joint training (readout trained by SGD)
                 pred = net(xb[sel])[:, WARMUP:]
-                tgt = yb[sel][:, WARMUP:]
-                loss = esr_loss(pred, tgt) + preemph_esr_loss(pred, tgt)
-                opt.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(params, 1.0)
-                opt.step()
-            sched.step()
+            loss = esr_loss(pred, tgt) + preemph_esr_loss(pred, tgt)
+            opt.zero_grad()
+            loss.backward()
+            nn.utils.clip_grad_norm_(params, 1.0)
+            opt.step()
+        sched.step()
     if varpro:
         net.eval()
-        net.W.copy_(solve_W(net, segs, device))  # final readout
+        net.W.copy_(solve_W(net, segs, device))  # global readout on the full train set
 
 
 def main() -> None:
     log = make_log("sota_varpro_probe")
     out = Path("outputs/sota/varpro_probe.json")
     out.parent.mkdir(parents=True, exist_ok=True)
-    log(f"VarPro A/B: trunk ch{CHANNELS}/L{N_LAYERS} + proj feat{FEAT_DIM}, {N_OUTER}x{EPOCHS_PER}ep OS1")
+    log(f"VarPro A/B (differentiable solve): trunk ch{CHANNELS}/L{N_LAYERS} + proj "
+        f"feat{FEAT_DIM}, {EPOCHS}ep OS1")
     from vguitar.data import Dataset
     results: dict = {}
     for key in CIRCUITS:
