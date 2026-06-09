@@ -172,6 +172,27 @@ def _rect_feats_np(x: np.ndarray, thr: tuple[float, ...]) -> np.ndarray:
     return np.stack(feats, axis=0).astype(np.float32)
 
 
+def _onepole_scan(x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
+    """Stable log-depth parallel scan of the leaky integrator
+    ``s_k[n] = a_k s_k[n-1] + (1 - a_k) x[n]`` (zero initial state).
+
+    ``x`` (B, T), ``a`` (K,) in (0, 1) -> ``s`` (B, K, T). A Hillis-Steele inclusive
+    scan: after the step at offset d, ``s[n]`` holds up to 2d terms of the
+    exponentially-weighted sum; doubling d reaches the full window in ceil(log2 T)
+    steps. Gives the TCN unbounded (O(1)/sample) memory the dilated-FIR receptive
+    field lacks; the numpy twin streams the identical recurrence via ``lfilter``
+    with carried state, so ``process == process_block`` stays bit-exact."""
+    t = x.shape[-1]
+    s = (1.0 - a)[None, :, None] * x[:, None, :]  # (B, K, T) input term
+    shift, a_pow = 1, a.clone()  # a_pow tracks a^shift
+    while shift < t:
+        tail = s[..., shift:] + a_pow[None, :, None] * s[..., :-shift]
+        s = torch.cat([s[..., :shift], tail], dim=-1)
+        shift *= 2
+        a_pow = a_pow * a_pow
+    return s
+
+
 def _mixed_act_np(
     conv: np.ndarray, sizes: tuple[int, int, int, int, int], alpha: np.ndarray
 ) -> np.ndarray:
@@ -225,6 +246,8 @@ class _CIRCE3Net(nn.Module):
         block_act: str = "mixed",
         out_shaper: str = "none",
         shaper_k: int = 8,
+        n_state: int = 0,
+        sr_state: int = 44_100,
     ) -> None:
         super().__init__()
         self.n_total = n_blocks * n_layers
@@ -234,7 +257,16 @@ class _CIRCE3Net(nn.Module):
         self.block_act = block_act
         self.out_shaper = out_shaper
         self.shaper_k = shaper_k
-        self.input = nn.Conv1d(_n_rect_feats(rect_thr), channels, 1)
+        self.n_state = n_state
+        self.input = nn.Conv1d(_n_rect_feats(rect_thr) + n_state, channels, 1)
+        # Leaky-integrator state channels: K learnable one-poles fed to the input
+        # alongside x, giving unbounded memory the FIR stack lacks. tau init spans
+        # ~5..500 ms at the internal (oversampled) rate; a_k = sigmoid(logit) stays in
+        # (0,1). Linear in the gain-scaled input -> input-scaling-equivariant.
+        if n_state > 0:
+            taus = torch.logspace(float(np.log10(5e-3)), float(np.log10(0.5)), n_state)
+            a0 = torch.exp(-1.0 / (taus * sr_state)).clamp(1e-4, 1 - 1e-6)
+            self.a_logit = nn.Parameter(torch.log(a0 / (1.0 - a0)))
         dilations = [2**i for i in range(n_layers)]
         layer_cls = _MixedLayer if block_act == "mixed" else _GatedLayer
         self.layers = nn.ModuleList(
@@ -274,6 +306,8 @@ class _CIRCE3Net(nn.Module):
     def raw(self, x: torch.Tensor, c_sys: torch.Tensor | None) -> torch.Tensor:
         """Pre-clamp output ``(B, T)``. ``x`` is ALREADY signal-scaled."""
         xin = _rect_feats_torch(x, self.rect_thr) if self.rect_thr else x.unsqueeze(1)
+        if self.n_state > 0:
+            xin = torch.cat([xin, _onepole_scan(x, torch.sigmoid(self.a_logit))], dim=1)
         h = self.input(xin)  # (B, C, T)
         skip = h.new_zeros(h.shape)
         gamma = beta = None
@@ -330,6 +364,7 @@ class CIRCE3(Model):
         out_shaper: str = "none",
         shaper_k: int = 8,
         grad_clip: float = 1.0,
+        n_state: int = 0,
         device: str = "cpu",
     ) -> None:
         if saturator not in ("clamp", "adaa1", "adaa2"):
@@ -366,7 +401,10 @@ class CIRCE3(Model):
         self.out_shaper = out_shaper
         self.shaper_k = int(shaper_k)
         self.grad_clip = float(grad_clip)
+        self.n_state = int(n_state)
         self.device = torch.device(device)
+        from vguitar import AUDIO_SR
+
         self.net = _CIRCE3Net(
             channels,
             n_blocks,
@@ -378,6 +416,8 @@ class CIRCE3(Model):
             block_act,
             out_shaper,
             self.shaper_k,
+            self.n_state,
+            AUDIO_SR * self.oversample,
         ).to(self.device)
         self._stream: dict[str, Any] | None = None
 
@@ -403,6 +443,7 @@ class CIRCE3(Model):
             "out_shaper": self.out_shaper,
             "shaper_k": self.shaper_k,
             "grad_clip": self.grad_clip,
+            "n_state": self.n_state,
         }
 
     def _dc_ba(self) -> tuple[np.ndarray, np.ndarray]:
@@ -654,7 +695,13 @@ class CIRCE3(Model):
             "dc_zi": np.zeros(1, dtype=np.float64),
             "adaa": self._make_adaa(),
             "os": _OverSampler(self.oversample, self.os_taps) if self.oversample > 1 else None,
+            "n_state": self.net.n_state,
         }
+        if self.net.n_state > 0:
+            # leaky-integrator decays a_k = sigmoid(logit); stream each as a one-pole
+            # lfilter with carried state (zi) -> identical recurrence to _onepole_scan.
+            st["iir_a"] = (1.0 / (1.0 + np.exp(-sd["a_logit"]))).astype(np.float64)
+            st["iir_zi"] = [np.zeros(1, dtype=np.float64) for _ in range(self.net.n_state)]
         if self.n_system > 0:
             st.update(
                 cw0=sd["cond.0.weight"],
@@ -693,6 +740,15 @@ class CIRCE3(Model):
             gamma, beta = self._film_np(s, sysv)
         ch, k, dil = s["c"], s["k"], s["dil"]
         feats = _rect_feats_np(xb, s["rect_thr"]) if s["rect_thr"] else xb[None, :]
+        if s["n_state"] > 0:
+            from scipy.signal import lfilter
+
+            state = np.empty((s["n_state"], nb), dtype=np.float32)
+            for j in range(s["n_state"]):
+                aj = s["iir_a"][j]
+                yj, s["iir_zi"][j] = lfilter([1.0 - aj], [1.0, -aj], xb, zi=s["iir_zi"][j])
+                state[j] = yj
+            feats = np.concatenate([feats, state], axis=0)
         h = s["w_in"] @ feats + s["b_in"][:, None]
         skip = np.zeros((ch, nb), dtype=np.float32)
         for i, (cw, cb, rw, rb, sw, sb) in enumerate(s["layers"]):

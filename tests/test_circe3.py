@@ -151,6 +151,42 @@ def test_rect_input_preserves_input_scaling() -> None:
     assert np.max(np.abs(y_g - y_scaled)) < 1e-5
 
 
+def test_iir_state_streaming_and_roundtrip(tmp_path) -> None:
+    """Leaky-integrator state channels (n_state>0) keep streaming bit-exact through
+    the full oversampling chain, preserve output length, and round-trip save/load."""
+    torch.manual_seed(0)
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
+               oversample=2, n_state=4)
+    c = np.array([0.6], np.float32)
+    assert _const_stream_err(m, c) <= 1e-4
+    x = np.random.default_rng(0).standard_normal(2048).astype(np.float32) * 0.3
+    assert len(m.process(x, c)) == len(x)
+    p = tmp_path / "iir.model"
+    m.save(p)
+    r = CIRCE3.load(p)
+    assert r.n_state == 4
+    assert np.max(np.abs(m.process(x, c) - r.process(x, c))) < 1e-6
+
+
+def test_iir_state_ragged_blocks() -> None:
+    """The one-pole state carries correctly across ragged block sizes (block-size
+    invariant), matching per-sample streaming."""
+    torch.manual_seed(0)
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4, n_state=4)
+    assert _ragged_err(m, np.array([0.6], np.float32)) <= 1e-4
+
+
+def test_iir_state_preserves_input_scaling() -> None:
+    """The one-pole state is linear in the gain-scaled input, so the signal-control =
+    input-gain identity still holds."""
+    torch.manual_seed(0)
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4, n_state=4)
+    x = np.random.default_rng(2).standard_normal(2048).astype(np.float32) * 0.3
+    y_g = m.process(x, np.array([0.7], np.float32))
+    y_scaled = m.process(0.7 * x, np.array([1.0], np.float32))
+    assert np.max(np.abs(y_g - y_scaled)) < 1e-5
+
+
 def test_block_act_mixed_streaming_and_roundtrip(tmp_path) -> None:
     """The heterogeneous mixed-activation block (block_act='mixed') must keep
     streaming bit-exact (incl. under oversampling + FiLM), preserve output length,
