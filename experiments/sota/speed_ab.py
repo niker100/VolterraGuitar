@@ -29,15 +29,15 @@ from vguitar.models.circe3 import CIRCE3
 
 MODEL = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
          "dcblock_fc": 0.0, "n_state": 4}
-# (label, batch, lr, amp). Push batch up to fill the 24 GB card; LR ~sqrt-scaled to
-# hold convergence as steps/epoch drop. OOM arms are caught + skipped (see main).
+# (label, batch, lr, amp). Isolate bf16 AMP head-to-head at each batch; push batch to fill
+# the 24 GB card; LR ~sqrt-scaled to hold convergence. OOM arms are caught + skipped.
 ARMS = [
-    ("b12", 12, 3e-3, False),         # control (current default)
-    ("b48_lr6", 48, 6e-3, False),     # 4x batch
-    ("b96_lr9", 96, 9e-3, False),     # 8x batch
-    ("b192_lr12", 192, 12e-3, False),  # 16x batch
-    ("b384_lr17", 384, 17e-3, False),  # 32x batch (may OOM -> caught)
-    ("b96_amp", 96, 9e-3, True),      # 8x batch + bf16 AMP
+    ("b12", 12, 3e-3, False),          # control (current default)
+    ("b96_lr9", 96, 9e-3, False),      # 8x batch, fp32
+    ("b96_amp", 96, 9e-3, True),       # 8x batch, bf16  (vs b96_lr9 = pure AMP effect)
+    ("b192_lr12", 192, 12e-3, False),  # 16x batch, fp32
+    ("b192_amp", 192, 12e-3, True),    # 16x batch, bf16
+    ("b384_amp", 384, 17e-3, True),    # 32x batch, bf16 (fills the card; may OOM)
 ]
 CIRC = ["jfet", "hard_clipper", "bjt"]
 EPOCHS = 150
