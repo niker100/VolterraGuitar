@@ -65,7 +65,8 @@ _DB4_LO = (
 def _qmf_hi(lo: torch.Tensor) -> torch.Tensor:
     """Quadrature-mirror highpass from a lowpass: g[k] = (-1)^k h[L-1-k]."""
     rev = torch.flip(lo, dims=[0])
-    signs = torch.tensor([(-1.0) ** k for k in range(lo.numel())], dtype=lo.dtype)
+    signs = torch.tensor([(-1.0) ** k for k in range(lo.numel())], dtype=lo.dtype,
+                         device=lo.device)
     return signs * rev
 
 
