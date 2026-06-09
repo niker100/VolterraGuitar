@@ -75,7 +75,27 @@ Kaiser-windowed filters around each activation) if plain ADAA under-suppresses.
 ## Branch B — a representation with the right inductive bias for folding
 
 If bandwidth is not the wall, the smooth-TCN *prior* is wrong for a periodic fold.
-Swings:
+
+### Swing #1 RESULT — learned Fourier output shaper: REJECTED (null + mild regression)
+
+`wavefolder_shaper_ab.py` (`out_shaper="fourier"`, K=8, residual `y=o+Σc_k sin(kwo)`,
+mixed/grad-clip/OS2/150ep, multi-seed):
+
+| circuit | baseline | fourier8 | Δ | RTF |
+|---|---|---|---|---|
+| **wavefolder** (target, 2 seeds) | 0.1798 | 0.1793 | **−0%** (noise) | 2.62× |
+| bjt (guard) | 0.0046 | 0.0047 | +1% (noise) | 2.56× |
+| jfet (guard) | 0.0088 | 0.0097 | **+10% (regress)** | 2.63× |
+
+An explicit periodic primitive **at the output** does not move the wavefolder
+(within seed noise) and mildly hurts smooth jfet. So a *pointwise* fold-basis on
+the scalar pre-output is too weak — the folding has to interact with the signal
+dynamics *through* the network, not be bolted on at the end. The option is kept
+default-off (RTF-free, harmless) but is **not** integrated. → escalate to the
+swings below (periodicity *throughout* the net, or a fundamentally different
+representation), gated on the capacity probe.
+
+Remaining swings:
 1. **Sinusoidal output basis / harmonic head.** The fold is near-periodic in the
    input amplitude; predict a band-limited harmonic series (learned amplitudes ×
    a fixed `sin(kθ)` basis where `θ` tracks an instantaneous phase from the input)
