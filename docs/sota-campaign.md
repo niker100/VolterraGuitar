@@ -218,3 +218,15 @@ for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
   starvation, seq_len fixed → isolates depth). dcblock_off, OS2, on hard_clipper +
   crossover + fullwave + jfet + bjt. *Does ~2× receptive field move the knee/near-miss
   circuits?*
+- **2026-06-09 — Campaign 5 RESULT: depth is a strong but MIXED lever.** nb2/L10
+  (~2× RF) **cracks jfet** 0.0094→0.0020 ✅, ~halves hard_clipper 0.0933→0.0558,
+  helps fullwave 0.0070→0.0057, bjt stays 0.0044 ✅ — but **hurts crossover**
+  0.0225→0.0299 (the dead-zone prefers shallow; its lever is IIR, not depth). nb1/L11
+  is cheaper/faster (33k, RTF 4.2) but pushes bjt to 0.0053 (over). ⇒ **nb2/L10 is the
+  depth choice.** Fig: `sota_depth_sweep`. Best-per-circuit now: asym 0.0007, jfet
+  0.0020, bjt 0.0044 (**3/9 clear**), fullwave 0.0057 (near).
+- **2026-06-09 — Campaign 7 (`unified`)** launched (GPU): the convergence config
+  **dcblock_off + nb2/L10 (depth) + n_state=4 (IIR)**, full 9 circuits, seeds (0,7).
+  *How many cross 0.005 with the validated levers stacked?* Expected resisters:
+  hard_clipper, wavefolder (→ grey-box / complementary metric). crossover is the
+  open question (depth hurts, IIR helps — net TBD).
