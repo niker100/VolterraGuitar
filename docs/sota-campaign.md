@@ -206,3 +206,15 @@ for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
   test + save/load round-trip. Then a production-config (OS2/nb2/dcblock_off)
   combined campaign: baseline vs +IIR vs +corners vs +both vs +depth, multi-seed,
   with the smooth circuits as regression guards.
+- **2026-06-09 — Campaign 4 RESULT: learnable corners are INERT (drop them).**
+  hard_clipper 0.1092→0.1079 (−1%), crossover 0.0703→0.0676 (−4%), bjt −1%. The
+  thresholds barely moved from init (0.3/0.7/1.5 stuck), i.e. SGD found no gradient
+  use for them — same dead end as the fixed bank. ⇒ do NOT integrate corners; the
+  hard_clipper knee residual is not fixable by input corner primitives. Fig:
+  `lever_corner_probe`. So integration = **IIR only**.
+- **2026-06-09 — Campaign 5 (`depth_sweep`)** launched (GPU): the only un-confirmed
+  hard_clipper lead is depth. nb2/L9 (RF 2045, control) vs nb1/L11 (RF 4095) vs
+  nb2/L10 (RF 4093) — both deeper configs keep RF inside the training window (no
+  starvation, seq_len fixed → isolates depth). dcblock_off, OS2, on hard_clipper +
+  crossover + fullwave + jfet + bjt. *Does ~2× receptive field move the knee/near-miss
+  circuits?*
