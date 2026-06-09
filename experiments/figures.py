@@ -264,6 +264,43 @@ def fig_spectral_zoo(zoo: dict[str, Any]) -> None:
     _save(fig, "spectral_zoo")
 
 
+def fig_spectral_leads(leads: dict[str, Any]) -> None:
+    """Multi-seed deep-dive verdict: grouped held-ESR bars over 3 formant circuits
+    (bjt/jfet/tube_screamer) for the hybrid vs the three cheap zoo leads, with
+    seed min-max whiskers and a log y-axis (values span 0.009 -> 1.0). Tells the
+    whole story at a glance: the hybrid is the only flat, low, seed-stable line;
+    every cheap operator either spikes, swings across seeds, or fails outright."""
+    models = ["hybrid", "stft_mix", "fft_longfir", "wavelet"]
+    cols = [OKABE_ITO["blue"], OKABE_ITO["green"], OKABE_ITO["orange"], OKABE_ITO["vermillion"]]
+    circuits = [c for c in ("bjt", "jfet", "tube_screamer") if c in leads.get("hybrid", {})]
+    x = np.arange(len(circuits))
+    w = 0.2
+    fig, ax = plt.subplots(figsize=(9, 4.0))
+    for j, (m, col) in enumerate(zip(models, cols, strict=True)):
+        means = np.array([leads[m][c]["esr_mean"] for c in circuits])
+        lo = np.array([min(leads[m][c]["esr"]) for c in circuits])
+        hi = np.array([max(leads[m][c]["esr"]) for c in circuits])
+        off = (j - 1.5) * w
+        ax.bar(x + off, means, w, label=m, color=col, edgecolor="black", linewidth=0.4,
+               yerr=[means - lo, hi - means], capsize=2, error_kw={"lw": 0.8})
+        for xi, mu in zip(x, means, strict=True):
+            if mu >= 0.99:  # flag the catastrophic failures
+                ax.text(xi + off, 1.02, "fail", ha="center", va="bottom", fontsize=6,
+                        color=OKABE_ITO["vermillion"], rotation=90)
+    ax.set_yscale("log")
+    ax.axhline(leads["hybrid"]["jfet"]["esr_mean"], ls=":", color=OKABE_ITO["blue"], lw=1,
+               alpha=0.5)
+    ax.set_xticks(x)
+    ax.set_xticklabels(circuits, fontsize=9)
+    ax.set_ylabel("held-out ESR (log) — lower better")
+    ax.set_title("Spectral leads, multi-seed: only the time+spectral hybrid generalizes\n"
+                 "(whiskers = seed min-max; cheap operators spike, swing, or fail)",
+                 fontsize=9)
+    ax.legend(fontsize=8, ncol=4, loc="upper center", bbox_to_anchor=(0.5, -0.1))
+    fig.tight_layout()
+    _save(fig, "spectral_leads")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -308,6 +345,10 @@ def main() -> None:
     if zoo:
         fig_spectral_zoo(zoo)
         made.append("spectral_zoo")
+    leads = _load("spectral_leads")
+    if leads:
+        fig_spectral_leads(leads)
+        made.append("spectral_leads")
     print(f"generated {len(made)} figures: {', '.join(made) or '(none — no JSONs yet)'}", flush=True)
 
 

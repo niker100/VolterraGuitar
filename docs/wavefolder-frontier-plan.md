@@ -381,3 +381,31 @@ only weakness is jfet. If that's a fixable instability (single-seed), it's a
 **cheaper-than-hybrid** architecture serving the efficiency goal → deep-dive next
 (multi-seed × bjt/jfet/tube_screamer). The `wavelet` device bug is a quick fix worth
 re-running (tiny, 6.7k params).
+
+### Step 3c RESULT — multi-seed deep-dive: the hybrid is the ONLY generalist (zoo leads rejected)
+
+Ran the deep-dive (`experiments/spectral_leads.py`, 2 seeds × bjt/jfet/tube_screamer,
+150ep OS1) to test whether the zoo's circuit-split leads were robust or seed noise,
+and whether any generalizes to a third formant circuit (tube_screamer). Mean held-ESR
+over seeds (whiskers = seed min–max in `spectral_leads.png`):
+
+| model | bjt | jfet | tube_screamer | verdict |
+|---|---|---|---|---|
+| **hybrid** (time+spectral) | **0.0214** | **0.0088** | **0.0133** | **only robust generalist** — low + seed-stable everywhere |
+| stft_mix | 0.0390 | 0.0602 | 0.0442 | apparent bjt "win" was **seed noise**; worse than hybrid on all 3 |
+| fft_longfir | 0.0874 (unstable) | 0.0044 | 1.0000 | best jfet + cheapest (~85× rtf), but bjt swings 0.037–0.138 and **TS fails outright** |
+| wavelet | 0.5447 | 0.3099 | 0.3047 | fixed (no crash) but uniformly broken — multi-res waveshaper doesn't train |
+
+**Verdict: the time+spectral hybrid is the keeper; every cheap pure-spectral operator
+is rejected as a universal model.** The zoo's single-seed `stft_mix` bjt win did not
+survive a second seed — multi-seed it is uniformly ~2–3× worse than the hybrid.
+`fft_longfir`'s jfet win is **real but narrow**: it is genuinely the best (and
+cheapest) model on the *mildest* circuit, yet it is seed-unstable on strong distortion
+(bjt) and **fails completely on tube_screamer (ESR 1.0)** — a mild-circuit specialist,
+not a generalist. This *re-confirms* the core thesis from a new angle: harmonics need a
+full-bandwidth **time-domain** nonlinearity (the hybrid's TCN trunk), and the spectral
+branch earns its place only as a cheap **linear** formant-shaping companion — not as a
+replacement for the time trunk. **Decision: stop the pure-spectral-operator search;
+the proven Step-3 time+spectral hybrid stands as the architecture to integrate** (causal
+overlap-add streaming + RTF/latency measurement + CIRCE3 integration) when that work is
+greenlit. No further spectral-zoo experiments are warranted.
