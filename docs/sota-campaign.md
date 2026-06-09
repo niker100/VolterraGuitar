@@ -154,3 +154,10 @@ channel for hysteretic + crossover; (rank-3) learnable-threshold rectified corne
 hard_clipper/crossover; (rank-4) confirm the depth lead with an RTF gate; (metric) add
 a band-decomposed ESR column to every hard eval, and for wavefolder report a
 complementary log-spectral/harmonic-match metric rather than gating on 0.005.
+
+- **2026-06-09 — rank-2 IIR prototype built + validated (`iir_probe.py`), queued
+  behind the re-baseline.** Learnable one-pole state channels `s_k[n]=a_k s_k[n-1]+
+  (1-a_k)x[n]` (τ init 5–500 ms) computed via a stable log-depth parallel scan
+  (no torchaudio; self-test matches a sequential reference to 2.4e-7). Costs +100
+  params, input-scaling-equivariant, streamable. A/B (state on/off, OS1) on
+  hysteretic_fuzz + crossover + bjt guard — launches when the GPU frees up.
