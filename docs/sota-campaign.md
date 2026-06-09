@@ -87,3 +87,70 @@ a uniform config, with smooth-circuit regression guards throughout.
   oversampling (alias) or a harmonic-weighted loss (preemph2 / STFT) move them?*
   (Note: numpy-twin RTF is 0.04–0.6× — a verification artifact, not deployable
   inference speed; real-time characterization deferred until an ESR winner exists.)
+- **2026-06-09 — Campaign 1b RESULT: oversampling + loss-weighting are DEAD on the
+  wall.** os4 was *worse* (asym 0.052→0.17, hard_clipper 0.089→0.30); preemph_order=2
+  and multi-STFT were inert (asym flat ~0.053, hard_clipper flat ~0.094). Confirms
+  the diagnosis below.
+- **2026-06-09 — Multi-agent wall diagnosis (workflow `sota-wall-diagnosis`)** +
+  independent verification. See the Diagnosis section below. Headline: the biggest
+  chunk of the "wall" is a **DC-blocker train/eval artifact**, not a model limit.
+- **2026-06-09 — Campaign 2 (`dc_rebaseline`)** launched: all 9 circuits, current
+  config, `dcblock_fc` OFF (0.0, the fix) vs ON (1.0, control), single seed.
+  *Re-establishes the true current-code baseline AND tests the rank-1 DC fix.*
+
+## Diagnosis — three separable failure modes (not one wall)
+
+A 5-investigator workflow + my own verification established that the "wall" is three
+distinct things, and the dominant one is a **measurement artifact**:
+
+**(1) DC-blocker train/eval mismatch [artifact — fix it].** `circe3.fit` computes its
+loss on the raw network output (no blocker, `circe3.py:508-516`), but `process_block`
+applies a 1 Hz DC-blocker at inference (`:724-729`, default `dcblock_fc=1.0`). For
+circuits whose target carries real, level-dependent output DC, a *perfect* model is
+floored. **Verified perfect-model ESR through the blocker** (my own measurement,
+`M.esr(y, lfilter(y))`, warmup 2048):
+
+| circuit | DC-block floor | baseline ESR | artifact share |
+|---|---|---|---|
+| asym_clipper | 0.0518 | 0.0524 | ~99% |
+| wavefolder | 0.1153 | 0.1746 | ~66% |
+| tube_screamer | 0.0022 | 0.0132 | ~17% |
+| jfet / fullwave | 0.0017 | 0.0086 / 0.0090 | ~20% |
+| hard_clipper | 0.0055 | 0.0919 | ~6% |
+| crossover | 0.0026 | 0.0261 | ~10% |
+| hysteretic_fuzz | 0.0003 | 0.0279 | ~1% |
+| bjt | 0.0000 | 0.0047 | ~0% |
+
+The DC is genuine signal (asym y_mean +0.050, tracks drive — the SPICE netlist has no
+output coupling cap), so the *faithful* fix is to reproduce it: train + eval raw
+(`dcblock_fc=0`). Uniform, removes an inference stage. Cross-harness proof: a plain
+TCN scored raw hits asym **0.0064** on the identical data (`radical_generalize_ab.json`).
+
+**(2) Structural memory deficit [hysteretic_fuzz — needs IIR state].** TCN receptive
+field is 21 ms (n_layers=9, OS2) but hysteretic_fuzz's bias-recovery τ = 22–440 ms.
+The FIR stack physically can't see the state defining the hysteresis loop. No
+capacity/loss/OS lever adds a missing pole — only added IIR/leaky-integrator state
+(rank-2 lever) can. (OS2 *halves* RF-in-ms vs OS1, so OS actively hurts memory.)
+
+**(3) Genuine spectral-bias floor [wavefolder, partly hard_clipper — hard limit].**
+After (1)+(2) are removed, the wavefolder residual (~0.06–0.15) is real and is NOT
+aliasing: targets are soxr-VHQ anti-alias-decimated (zero target aliasing) and the
+pointwise-NL-then-decimate alias floor is ~1e-6 at OS2 — 5 orders below the residual.
+The wavefolder map `0.45 sin(3.4x)+0.18 sin(9x)` is non-monotonic/multi-fold; a
+finite-Lipschitz smooth-activation TCN rounds the fold turnarounds. **Honest verdict:
+uniform <0.005 on wavefolder is likely NOT achievable** without a grey-box learnable
+static waveshaper (rank-5, speculative, in tension with no-tailoring). hard_clipper's
+near-vertical knee (tanh(60x)) may yield to learnable-threshold corners (rank-3) +
+depth (rank-4) — one un-confirmed lead (deep ch24/L11) already dropped it 0.09→0.04.
+
+**Dead ends (catalogued — do not retry):** OS>2 on hard circuits (measured worse);
+fixed-threshold rect bank + Fourier/sine output head (inert); raw width capacity
+(inert + destabilizing); more high-band/STFT loss weight (preemph already 89–97%
+HF-weighted; STFT wrecks the transfer curve); MoE/CIRCE-X (regresses smooth, gate
+collapses); grad-clip retuning (already optimal); attributing the wall to aliasing.
+
+**Plan after the DC re-baseline:** (rank-2) add a gated leaky-integrator IIR state
+channel for hysteretic + crossover; (rank-3) learnable-threshold rectified corners for
+hard_clipper/crossover; (rank-4) confirm the depth lead with an RTF gate; (metric) add
+a band-decomposed ESR column to every hard eval, and for wavefolder report a
+complementary log-spectral/harmonic-match metric rather than gating on 0.005.
