@@ -29,13 +29,15 @@ from vguitar.models.circe3 import CIRCE3
 
 MODEL = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
          "dcblock_fc": 0.0, "n_state": 4}
-# (label, batch, lr, amp)
+# (label, batch, lr, amp). Push batch up to fill the 24 GB card; LR ~sqrt-scaled to
+# hold convergence as steps/epoch drop. OOM arms are caught + skipped (see main).
 ARMS = [
-    ("b12", 12, 3e-3, False),       # control (current default)
-    ("b48", 48, 3e-3, False),       # 4x batch, same LR (isolates the fewer-steps cost)
-    ("b48_lr6", 48, 6e-3, False),   # 4x batch, ~sqrt-scaled LR
-    ("b96_lr9", 96, 9e-3, False),   # 8x batch, ~sqrt-scaled LR
-    ("b48_amp", 48, 6e-3, True),    # 4x batch + bf16 AMP
+    ("b12", 12, 3e-3, False),         # control (current default)
+    ("b48_lr6", 48, 6e-3, False),     # 4x batch
+    ("b96_lr9", 96, 9e-3, False),     # 8x batch
+    ("b192_lr12", 192, 12e-3, False),  # 16x batch
+    ("b384_lr17", 384, 17e-3, False),  # 32x batch (may OOM -> caught)
+    ("b96_amp", 96, 9e-3, True),      # 8x batch + bf16 AMP
 ]
 CIRC = ["jfet", "hard_clipper", "bjt"]
 EPOCHS = 150
@@ -54,14 +56,22 @@ def main() -> None:
         row: dict = {"kind": kind}
         for label, bs, lr, amp in ARMS:
             t = time.time()
-            torch.manual_seed(0)
-            m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **MODEL)
-            m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=lr, seq_len=4096, batch_size=bs,
-                                      warmup=2048, seed=0, amp=amp))
-            esr = held_esr(m, ts)
-            secs = time.time() - t
-            row[label] = {"held": esr, "secs": secs, "batch": bs, "lr": lr, "amp": amp}
-            log(f"{key:14s} {label:9s} held={esr:.4f} ({secs:.0f}s)")
+            try:
+                torch.manual_seed(0)
+                m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **MODEL)
+                m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=lr, seq_len=4096, batch_size=bs,
+                                          warmup=2048, seed=0, amp=amp))
+                esr = held_esr(m, ts)
+                row[label] = {"held": esr, "secs": time.time() - t, "batch": bs,
+                              "lr": lr, "amp": amp}
+                log(f"{key:14s} {label:10s} held={esr:.4f} ({time.time()-t:.0f}s)")
+                del m
+            except Exception as exc:  # OOM at big batch -> skip, free, continue
+                torch.cuda.empty_cache()
+                row[label] = {"held": None, "secs": time.time() - t, "batch": bs,
+                              "error": str(exc)[:120]}
+                log(f"{key:14s} {label:10s} FAILED: {str(exc)[:100]}")
+            out.write_text(json.dumps(results | {key: row}, indent=2))
         results[key] = row
         out.write_text(json.dumps(results, indent=2))
     log("=== speed / accuracy summary (secs | held-ESR) ===")
