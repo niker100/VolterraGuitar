@@ -334,3 +334,14 @@ over the 256-sample hop — **trivially real-time**. The 422k MLP was pure overk
 hidden≈16-32 (train with `center=False` so streaming matches), confirm
 streaming-exactness + RTF + latency, then integrate into CIRCE3.
 Figure: `outputs/figs/frontier/spectral_slim.png`.
+
+**FFT-ONLY ablation (`experiments/spectral_only_probe.py`) — why the hybrid needs the
+time head.** time-only / spectral-only / hybrid held-ESR: **bjt** 0.029 / **0.251** /
+0.022 ; **jfet** 0.0098 / **0.0262** / 0.0082. The spectral branch alone is a
+magnitude-conditioned complex gain `G·X` on the *existing* spectrum (a time-varying
+LINEAR filter) — it **cannot synthesize harmonics at empty bins**, so it fails at
+distortion (bjt ~9× worse than time-only, ~12× worse than hybrid; jfet 2.7× worse).
+BUT its jfet `band>4k` = 0.013 *beats* time-only's 0.018 — so it genuinely nails the
+**formant envelope** even alone, just not the waveform/harmonics. Clean proof of the
+division of labour: **time head = harmonic generation, spectral branch = linear
+formant shaping, hybrid = both.** Figure: `spectral_only.png`.

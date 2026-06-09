@@ -201,6 +201,36 @@ def fig_spectral_slim(slim: dict[str, Any]) -> None:
     _save(fig, "spectral_slim")
 
 
+def fig_spectral_only(so: dict[str, Any]) -> None:
+    """3-way (time-only / spectral-only / hybrid): spectral alone can't distort
+    (huge overall ESR, esp. bjt) yet still shapes the formant envelope (band>4k).
+    Left: overall ESR (log). Right: band>4k. The division-of-labor proof."""
+    circuits = list(so)
+    modes = ["time_only", "spectral_only", "hybrid"]
+    cols = [OKABE_ITO["gray"], OKABE_ITO["vermillion"], OKABE_ITO["blue"]]
+    x = np.arange(len(circuits))
+    w = 0.26
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(10.5, 3.6))
+    for ax, key, title, logy in (
+        (a1, "esr", "overall held-ESR (log) — spectral-only can't generate harmonics", True),
+        (a2, "band", "high-band (>4 kHz) ESR — spectral-only still shapes formants", False),
+    ):
+        for j, (mode, col) in enumerate(zip(modes, cols, strict=True)):
+            vals = np.array([so[c][mode][key] for c in circuits])
+            ax.bar(x + (j - 1) * w, vals, w, label=mode.replace("_", "-"), color=col,
+                   edgecolor="black", linewidth=0.4)
+        if logy:
+            ax.set_yscale("log")
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{c}\n[{so[c].get('kind', '')}]" for c in circuits], fontsize=8)
+        ax.set_title(title, fontsize=8.5)
+    a1.legend(fontsize=8)
+    fig.suptitle("Only the FFT branch? It filters, it doesn't distort — "
+                 "harmonics need the time head", fontsize=9.5)
+    fig.tight_layout()
+    _save(fig, "spectral_only")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -237,6 +267,10 @@ def main() -> None:
     if sl:
         fig_spectral_slim(sl)
         made.append("spectral_slim")
+    so = _load("spectral_only_probe")
+    if so:
+        fig_spectral_only(so)
+        made.append("spectral_only")
     print(f"generated {len(made)} figures: {', '.join(made) or '(none — no JSONs yet)'}", flush=True)
 
 
