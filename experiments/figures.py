@@ -364,6 +364,8 @@ def fig_lever_ab(name: str, data: dict[str, Any]) -> None:
     if len(tags) != 2:
         return
     off, on = tags
+    if not all("held" in data[c].get(off, {}) for c in circuits):
+        return  # not a simple held-ESR A/B (e.g. convergence curves -> fig_varpro_conv)
     base = np.array([data[c][off]["held"] for c in circuits])
     var = np.array([data[c][on]["held"] for c in circuits])
     x = np.arange(len(circuits))
@@ -387,9 +389,36 @@ def fig_lever_ab(name: str, data: dict[str, Any]) -> None:
     _save(fig, f"lever_{name}")
 
 
+def fig_varpro_conv(data: dict[str, Any]) -> None:
+    """held-ESR vs epoch, joint vs VarPro, per circuit — VarPro reaches the plateau in
+    ~3x fewer epochs (the closed-form readout trains the trunk against an always-optimal
+    head). The 'closed-form is computationally better than GD' result, made visible."""
+    circuits = list(data)
+    fig, axes = plt.subplots(1, len(circuits), figsize=(4.4 * len(circuits), 3.6),
+                             squeeze=False)
+    for ax, c in zip(axes[0], circuits, strict=True):
+        for tag, col in (("joint", OKABE_ITO["gray"]), ("varpro", OKABE_ITO["blue"])):
+            d = data[c][tag]
+            eps = sorted(int(k) for k in d if k.isdigit())
+            ax.plot(eps, [d[str(e)] for e in eps], "o-", color=col, lw=1.6, label=tag)
+        ax.set_yscale("log")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("held-ESR (log)")
+        ax.set_title(c, fontsize=9)
+        ax.legend(fontsize=8)
+    fig.suptitle("VarPro converges in ~3x fewer epochs (closed-form readout = always-optimal head)",
+                 fontsize=10)
+    fig.tight_layout()
+    _save(fig, "varpro_conv")
+
+
 def main() -> None:
     apply_style()
     made = []
+    conv = _load("sota/varpro_conv")
+    if conv:
+        fig_varpro_conv(conv)
+        made.append("varpro_conv")
     sota_dir = Path("outputs/sota")
     if sota_dir.exists():
         for p in sorted(sota_dir.glob("*.json")):

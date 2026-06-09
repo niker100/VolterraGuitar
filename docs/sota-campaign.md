@@ -285,3 +285,23 @@ solve is ~6× slower/epoch, so VarPro is slower as implemented.
 epochs (the only speed mechanism)? **The genuine computational win found is BIGGER BATCH**
 (validated ~1.4×, fills the 24 GB card) — that's the "computationally better" lever to
 adopt for the trained path, which remains the route to 0.005.
+
+### VarPro convergence WIN + production integration (2026-06-09)
+
+- **Convergence (`varpro_conv`, fp32):** VarPro reaches the same plateau in **~3× fewer
+  epochs** (bjt: plateau 0.0293 by ~ep60 vs joint ep150; jfet similar). The closed-form
+  readout trains the trunk against an always-optimal head from step 1. Fig: `varpro_conv`.
+- **The fp64 trap:** the 4090 cripples fp64 to ~1/64 of fp32, so the original fp64 solve
+  was ~6×/epoch and cancelled the win. **fp32 solve → 18.5 ms/batch vs joint's 16 ms** —
+  per-epoch cost ≈ joint, so the 3× epoch win becomes a **~2–3× wall-clock training
+  speedup at equal accuracy** (a SPEED win — VarPro=joint on final ESR, not better).
+- **INTEGRATED into the production model** (`circe3.py`, `TrainConfig.varpro`): solves the
+  final linear readout `out[3]` in closed form each step (fp32 differentiable ridge
+  lstsq), trunk backprops; `_varpro_set_readout` writes the global solution into the conv
+  at the end. Works WITH the IIR memory channels (`n_state`) + OS2 — the memory-heavy
+  path. **The numpy streaming twin is unchanged (readout stays a plain linear conv) —
+  bit-exact verified 7.7e-7; +1 test.** `varpro_circe3.py` validates the speedup on the
+  production model (bjt/jfet/hysteretic_fuzz; standard-150 vs varpro-60 vs varpro-150).
+- **Other closed-form paths (verdict):** ELM/Hammerstein are no-training but plateau
+  ~0.04–0.3 (no trained features) — fast screening/init tools, not SOTA. The closed-form
+  *readout* (VarPro) is the keeper: it accelerates training of the real model.
