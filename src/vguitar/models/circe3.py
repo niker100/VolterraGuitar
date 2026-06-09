@@ -267,6 +267,13 @@ class _CIRCE3Net(nn.Module):
             taus = torch.logspace(float(np.log10(5e-3)), float(np.log10(0.5)), n_state)
             a0 = torch.exp(-1.0 / (taus * sr_state)).clamp(1e-4, 1 - 1e-6)
             self.a_logit = nn.Parameter(torch.log(a0 / (1.0 - a0)))
+            # Zero-init the state-channel input weights so the net starts IDENTICAL to
+            # the no-IIR model (the state channels are inert at init) and learns to use
+            # memory only where it helps — no perturbation of the memoryless circuits
+            # (mirrors the zero-init FiLM/shaper). Gradient still flows, so a memory
+            # circuit turns the channels on.
+            with torch.no_grad():
+                self.input.weight[:, _n_rect_feats(rect_thr):, :].zero_()
         dilations = [2**i for i in range(n_layers)]
         layer_cls = _MixedLayer if block_act == "mixed" else _GatedLayer
         self.layers = nn.ModuleList(

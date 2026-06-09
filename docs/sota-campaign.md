@@ -230,3 +230,17 @@ for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
   *How many cross 0.005 with the validated levers stacked?* Expected resisters:
   hard_clipper, wavefolder (→ grey-box / complementary metric). crossover is the
   open question (depth hurts, IIR helps — net TBD).
+- **2026-06-09 — IIR regression found + fixed (zero-init), unified re-run.** The
+  unified run showed jfet 0.0020 (depth-only) → **0.0055** (both seeds) once IIR was
+  added: the IIR state-channel input weights were *random*-init, perturbing the
+  memoryless circuits. Fix: **zero-init the state-channel input weights** so the net
+  starts identical to no-IIR and learns memory only where it helps (mirrors the
+  zero-init FiLM/shaper; 33/33 tests still pass). Killed the tainted unified run; will
+  re-run clean. *Lesson: new input channels must be zero-init to stay neutral on
+  circuits that don't need them.*
+- **2026-06-09 — Training-speed track (user idea).** GPU underutilized at batch=12
+  (65% util, 18% mem, 45% power). Added `TrainConfig.amp` (bf16 autocast, fp32 weights
+  + numpy twin untouched, IIR scan forced fp32) and `speed_ab.py` (batch × LR × AMP,
+  measuring wall-clock AND held-ESR; bigger batch = fewer steps so LR co-scaled). The
+  jfet arm also validates the zero-init fix. Winner becomes the harness default for all
+  future campaigns. (VarPro noted but low-impact: only the thin 1×1 readout is linear.)
