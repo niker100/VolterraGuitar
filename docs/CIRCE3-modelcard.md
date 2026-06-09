@@ -139,7 +139,7 @@ recommended config for nailing the spectral properties. The factor was swept:
 and a sharper 191-tap FIR is no better than the default 127.
 
 The mechanism is made visible in `outputs/figs/circe3_oversample_aliasing.png`
-(reproduce with `uv run python make_oversample_figure.py`): a 2.5 kHz tone driven
+(reproduce with `uv run python experiments/make_oversample_figure.py`): a 2.5 kHz tone driven
 hard produces, in the base-rate (1×) model, a dense forest of **inharmonic alias
 spurs** between the true harmonics (its >Nyquist harmonics folded back); the 2×
 model removes them, restoring the circuit's clean between-harmonic floor.
@@ -164,7 +164,7 @@ It is not a hard-circuit-only trick — across the full 9-circuit suite it helps
 JFET −10%), is neutral on 2 (asym-clipper, wavefolder), and mildly regresses 1
 (hard-clipper +11%, within seed noise). It is uniform and training-only, so
 streaming, latency and RTF are unchanged. **This — not the rectified-feature
-basis — is what tamed the discontinuity circuits** (`make_gradclip_plot.py` →
+basis — is what tamed the discontinuity circuits** (`experiments/make_gradclip_plot.py` →
 `outputs/figs/gradclip_win.png`). A clip-value sweep confirmed 1.0 is the sweet
 spot (0.5 ≈ 1.0; 2.0 is worse).
 
@@ -209,7 +209,7 @@ streaming-exact (the numpy twin `_mixed_act_np` matches the torch forward to
 ~7e-8 incl. OS2 + FiLM) — so it is the **circuit-agnostic default**, consistent
 with the project's one-config-for-all-circuits constraint. `block_act="gated"`
 keeps the original gate for the two smooth circuits where it is marginally ahead.
-Reproduce: `mixed_vs_gated_final.py` → `outputs/mixed_vs_gated_final.json`.
+Reproduce: `experiments/mixed_vs_gated_final.py` → `outputs/mixed_vs_gated_final.json`.
 
 ## Why this is the optimal design (not more compute)
 

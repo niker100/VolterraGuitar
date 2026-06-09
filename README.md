@@ -124,7 +124,7 @@ make CIRCE3 the right choice:
    error, log-freq), `spectrogram` (circuit / CIRCE3 / dB-difference), and
    `transfer_family` (the Transferkennlinie across drives). The oversampling win is
    shown directly in `circe3_oversample_aliasing.png`
-   (`uv run python make_oversample_figure.py`).
+   (`uv run python experiments/make_oversample_figure.py`).
 
 Plus a cross-circuit ESR matrix (`compare_esr_matrix.png`) +
 `outputs/benchmark.{csv,json}`.

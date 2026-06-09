@@ -10,7 +10,7 @@ otherwise as radical as needed.
 
 ## Step 0 RESULT — the wall is NOT aliasing (representation-limited → Branch B)
 
-`wavefolder_os_ab.py` (mixed/grad-clip/150ep, 2 seeds on the hard arms):
+`experiments/wavefolder_os_ab.py` (mixed/grad-clip/150ep, 2 seeds on the hard arms):
 
 | config | held-ESR | vs OS2 | RTF |
 |---|---|---|---|
@@ -25,7 +25,7 @@ convergence at fixed epochs, but the headline is unambiguous: bandwidth is not t
 lever). **The wall is representation / inductive bias, not self-aliasing.** Branch A
 (ADAA alias-free activations) is therefore deprioritized; **taking Branch B**.
 
-## Step 0 — the diagnostic (DONE: `wavefolder_os_ab.py`)
+## Step 0 — the diagnostic (DONE: `experiments/wavefolder_os_ab.py`)
 
 Train production CIRCE3 (mixed/grad-clip/150ep) at `oversample ∈ {2,3,4}` and read
 held-ESR **and** CPU RTF. This is the branch point:
@@ -78,7 +78,7 @@ If bandwidth is not the wall, the smooth-TCN *prior* is wrong for a periodic fol
 
 ### Swing #1 RESULT — learned Fourier output shaper: REJECTED (null + mild regression)
 
-`wavefolder_shaper_ab.py` (`out_shaper="fourier"`, K=8, residual `y=o+Σc_k sin(kwo)`,
+`experiments/wavefolder_shaper_ab.py` (`out_shaper="fourier"`, K=8, residual `y=o+Σc_k sin(kwo)`,
 mixed/grad-clip/OS2/150ep, multi-seed):
 
 | circuit | baseline | fourier8 | Δ | RTF |
@@ -126,6 +126,29 @@ The honest bar: a *real* break is wavefolder well under ~0.15 with no smooth
 regression and RTF > 1. A null result that finally explains *why* the wall holds
 (with the OS4 evidence) is also a publishable conclusion — but only after the
 swings above are actually taken.
+
+## Capacity verdict — the wavefolder ~0.18 is a HARD TARGET FLOOR (not a model limit)
+
+`experiments/wavefolder_capacity_probe.py` (big configs fairly trained: lr=1e-3,
+grad-clip off, more epochs, OS2 — after the first attempt's ch24-tuned
+hyperparameters made ch48 *diverge* to 0.93):
+
+| config | params | held-ESR | vs ref | RTF |
+|---|---|---|---|---|
+| ref ch24/L9/OS2 | 54k | **0.1893** | — | 2.38× (RT) |
+| ch48 | 213k | 0.2050 | +8% | 0.28× (not RT) |
+| ch48/L11 | 259k | 0.2251 | +19% | 0.02× (not RT) |
+| ch64/L11 | 459k | 0.2104 | +11% | 0.08× (not RT) |
+
+**Even a fairly-trained 8.5×-bigger model is WORSE, and none is real-time.** With
+the OS null (bandwidth) and the Fourier-head null (output primitive), three
+independent levers now agree: **the wavefolder floor is a property of the
+band-limited target** (its multi-fold harmonics exceed what a causal real-time
+operator can recover from this excitation), not a capacity or bandwidth gap. This
+is the honest, decisive conclusion for the wavefolder; further single-circuit
+chasing is not worthwhile. The consolidated evidence figure is
+`outputs/figs/frontier/wavefolder_frontier.png`
+(`uv run python -m experiments.figures`).
 
 ## Step 2 — the multi-modal / mixture-of-experts swing (the big generalization bet)
 
