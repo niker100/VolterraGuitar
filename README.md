@@ -34,31 +34,51 @@ uv run vguitar bench --circuit bjt   # train + compare all models
 uv run vguitar live  --model tcn     # play guitar through it
 ```
 
-## CIRCE — the conditioned, interactive model
+## CIRCE3 — the SOTA model
 
-**CIRCE** (`vguitar.models.circe`) is the project's SOTA model: a small dilated
-TCN with a real-time cached-streaming kernel, conditioned by **per-block FiLM**
-so analog controls (potentiometers, switches, slow drift) are first-class — you
-can turn the knobs live. It's trained on SPICE **parametric sweeps** of the
-control, and **interpolates to control settings never simulated**. See
-[`docs/CIRCE-design.md`](docs/CIRCE-design.md) for the (adversarially reviewed)
-architecture.
+**CIRCE3** (`vguitar.models.circe3`) is the project's SOTA model, derived from
+approximation + information theory and confirmed by experiment (see
+[`docs/optimal-architecture.md`](docs/optimal-architecture.md)). It is a
+well-trained dilated gated **TCN** — the Boyd–Chua canonical realizer of a causal,
+time-invariant, fading-memory operator, unbeaten by any other backbone — with
+exogenous controls handled by their **physical kind**:
+
+- **signal-acting** controls (drive / gain / sustain / level) are folded **directly
+  into the input** as a gain, so the model reproduces *any* setting exactly by
+  construction (interpolation *and* extrapolation), with zero conditioning
+  parameters and no interpolation error;
+- **system-acting** controls (a tone cap, a bias) drive a **minimal per-block
+  FiLM** — the conditioner that, in the A/B, matched or beat every heavier scheme
+  (concat, rational gate, Chebyshev head, Fourier features, hypernetwork), all of
+  which were retired.
+
+Two signal-processing decisions then nail the **spectral fidelity** (the harmonic
+formants and the static transfer curve), each a bigger lever than network size:
+
+- a **phase-aware pre-emphasis-ESR** training loss lifts the low-energy formant
+  band into the gradient without the phase-blindness of a magnitude-STFT term, so
+  it sharpens the formants *and* the transfer curve at once;
+- **internal 2× oversampling** (`oversample=2`) removes the gated nonlinearity's
+  self-aliasing — the dominant residual error — dropping realistic held-out ESR
+  **~8–25× (to ≈0.001 on guitar-DI)**, streaming-exact and still real-time.
+
+On **realistic (band-limited) signals** the shipped oversampled model reaches
+**ESR ≈ 0.001–0.004 real-time on every tested control kind** — signal (BJT drive),
+static-map (Duffing β), dynamics (JFET tone). The dominant levers for held-out
+accuracy are **anti-aliasing, loss design, and control-grid density** — not the
+conditioner or more layers. Full results in
+[`docs/CIRCE3-modelcard.md`](docs/CIRCE3-modelcard.md).
 
 ```python
 from vguitar.circuits import get_circuit
 from vguitar.spice.runner import make_drive_dataset
-from vguitar.models.circe import CIRCE
+from vguitar.models.circe3 import CIRCE3
 
 ds = make_drive_dataset(get_circuit("bjt"), [0.005, 0.02, 0.04, 0.08, 0.16])  # sweep a "drive" knob
-m = CIRCE(n_control=1); m.fit(*ds.split()[:2])
-y = m.process(x, c=[0.06])          # emulate at a drive setting (incl. unseen ones)
+m = CIRCE3(n_control=1, signal_idx=(0,)); m.fit(*ds.split()[:2])
+y = m.process(x, c=[0.06])          # any drive (incl. unseen) — exact by input-scaling
 y = m.process_block(block, c=[g])   # real-time, knob g changeable per block
 ```
-
-On a BJT overdrive drive-sweep this reaches ESR ~0.08 across the whole
-clean→hard-clip range and interpolates to held-out knob settings. See
-[`docs/CIRCE-modelcard.md`](docs/CIRCE-modelcard.md) for the full results,
-controls, and honest limitations.
 
 ### Circuits (increasing complexity)
 
@@ -76,53 +96,52 @@ real component changes rendered through a **parameterized netlist**
 `spice.runner.make_control_dataset` + `spice.sampling.control_grid` (full-factorial
 for ≤2 knobs, Sobol for ≥3).
 
-### Benchmark CIRCE against the other methods (the clean head-to-head)
+### Benchmark — CIRCE3 vs the other architectures (the clean head-to-head)
 
 ```bash
-uv run vguitar shootout --circuits diode,bjt,jfet,tube_screamer   # + audio + figures
+uv run vguitar benchmark --circuits bjt,jfet     # + figures + CSV/JSON
 ```
 
-`shootout` is the fixed-operating-point, apples-to-apples comparison: per circuit,
-**every** method (fir, volterra, volterra_pc, wh, tcn, rnn, CIRCE) trains and tests
-on the *same* data and the *same* held-out signal (same circuit input → same
-target; CIRCE additionally gets the operating point as a constant control, so
-ESR/THD are directly comparable). It writes a per-circuit **leaderboard** + ESR-vs-
-RTF scatter, **overlay figures** (static transfer, harmonic stack, waveform +
-residual — every model vs the circuit), per-model **A/B audio**
-(`outputs/audio/shootout/<circuit>/`), and a cross-circuit **ESR matrix** +
-`outputs/shootout.csv`. On the nonlinear circuits (bjt/jfet/tube_screamer) the
-feedforward neural models (CIRCE, tcn) beat classical Volterra/WH by 2–8×; CIRCE
-is best-or-tied while being real-time *and* the only interactive one. On the easy,
-near-memoryless diode, classical Volterra rightly wins.
+`benchmark` is the project's single, insightful comparison. Per circuit it trains
+CIRCE3 and every other deployable architecture (tcn, rnn, wiener-hammerstein,
+volterra) on identical data and shows, by eye and by number, the two things that
+make CIRCE3 the right choice:
 
-### Validate the CIRCE knob (its unique edge), one circuit or across all
+1. **Accurate *and* real-time** — the **ESR-vs-RTF** plane (`compare_<circuit>_esr_rtf.png`)
+   puts CIRCE3 in the good corner, beating the recurrent / state-space / classical
+   models and matching the strong TCN backbone it builds on.
+2. **Generalizes across the control knob** — `compare_<circuit>_generalization.png`:
+   one CIRCE3 stays accurate at *every* drive (seen and unseen) by input-scaling,
+   while a plain TCN trained at one operating point degrades as the knob moves — the
+   capability the unconditioned architectures structurally lack.
 
-```bash
-uv run vguitar circe --circuit tube_screamer        # train + validate (per-axis + 2-D figures)
-uv run vguitar validate --circuits bjt,diode,jfet,tube_screamer,big_muff
-```
+3. **Nails the spectral properties** — a suite of fidelity overlays vs the real
+   circuit: `transfer` (output-vs-input curve + residual panel), `harmonics`
+   (stack + per-harmonic error), `spectrum` (the Welch **formant envelope** +
+   error, log-freq), `spectrogram` (circuit / CIRCE3 / dB-difference), and
+   `transfer_family` (the Transferkennlinie across drives). The oversampling win is
+   shown directly in `circe3_oversample_aliasing.png`
+   (`uv run python make_oversample_figure.py`).
 
-`circe` writes a report (per-setting ESR/THD, interpolation worst-case/p95,
-moving-knob streaming error, real-time factor, stability) plus house-style figures
-to `outputs/figs/` and A/B wavs to `outputs/audio/`. `validate` aggregates CIRCE
-across circuits into a cross-circuit summary and a circuit×model ESR matrix.
+Plus a cross-circuit ESR matrix (`compare_esr_matrix.png`) +
+`outputs/benchmark.{csv,json}`.
 
 ### Play it — turn the knobs live
 
 ```bash
 # offline render at fixed knob settings
-uv run vguitar live --circuit tube_screamer --model circe \
+uv run vguitar live --circuit tube_screamer --model circe3 \
     --in di.wav --out wet.wav --control drive=0.2,tone=0.6
 # knob automation (JSON breakpoints, linearly interpolated over time)
-uv run vguitar live --circuit bjt --model circe --in di.wav --out wet.wav \
+uv run vguitar live --circuit bjt --model circe3 --in di.wav --out wet.wav \
     --automation knobs.json     # [{"t":0,"drive":0.02},{"t":3,"drive":0.16}]
 # real-time (needs an audio device): omit --in/--out, set the knobs with --control
-uv run vguitar live --circuit bjt --model circe --control drive=0.08
+uv run vguitar live --circuit bjt --model circe3 --control drive=0.08
 ```
 
 Trained checkpoints are loaded from `runs/` or, if absent, from
-`assets/checkpoints/<circuit>.circe.model` (the repo ships `bjt`), so the commands
-above run without retraining.
+`assets/checkpoints/<circuit>.circe3.model` (written by `vguitar benchmark`), so
+the live commands run without retraining.
 
 ## Reproducibility
 
@@ -155,6 +174,6 @@ ngspice is installed as a shared library via PySpice
 library is not available", run `uv run pyspice-post-installation
 --force-install-ngspice-dll`. On Windows only `ngspice.dll` ships, so the runner
 pins `ngspice_id=0` (one process-wide instance — the sim cannot be parallelized
-in-process). Everything that needs ngspice (`gen`, `bench`, `circe`, `validate`,
+in-process). Everything that needs ngspice (`gen`, `bench`, `benchmark`,
 `selftest`'s circuit rows) degrades gracefully or SKIPs when it is absent; the
 model/plotting/streaming tests run without it.

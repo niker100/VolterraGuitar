@@ -138,7 +138,9 @@ def test_make_control_dataset_di_mix() -> None:
     assert np.all(np.isfinite(ds.y)) and np.any(ds.y != 0)
 
 
-@pytest.mark.parametrize("circuit_name", ["jfet", "tube_screamer", "big_muff"])
+@pytest.mark.parametrize(
+    "circuit_name", ["jfet", "tube_screamer", "big_muff", "hysteretic_fuzz"]
+)
 def test_complex_circuit_converges(circuit_name: str) -> None:
     """Each complex circuit converges (finite, correct length) at default and at
     the netlist-control extremes, driven near nominal."""

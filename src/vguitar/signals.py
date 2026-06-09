@@ -119,6 +119,44 @@ def sine(
     return out.astype(np.float32)
 
 
+def tone_bank(
+    duration_s: float,
+    sr: int,
+    *,
+    f_lo: float = 80.0,
+    f_hi: float = 6000.0,
+    n_tones: int = 16,
+    peak: float = 1.0,
+    fade_ms: float = 5.0,
+) -> np.ndarray:
+    """Concatenated ISOLATED single sines at log-spaced frequencies (float32).
+
+    Unlike :func:`multisine` (all tones sounding at once, so the response is full
+    of intermodulation products), this plays **one tone at a time**, so the model
+    sees each tone's *clean per-tone harmonic structure*. That is the probe that
+    uniquely constrains the nonlinearity's harmonic generation: broadband / multi-
+    tone excitation under-determines it (many nonlinearities match the broadband
+    spectrum but differ on a single tone), which lets a model invent spurious
+    overtones a band-limited circuit never produces. Each segment is edge-faded to
+    suppress the click (broadband splatter) at concatenation boundaries.
+    """
+    n_total = round(duration_s * sr)
+    if n_total <= 0 or n_tones <= 0:
+        return np.zeros(0, dtype=np.float32)
+    freqs = np.logspace(np.log10(f_lo), np.log10(min(f_hi, 0.45 * sr)), n_tones)
+    seg = max(n_total // n_tones, 1)
+    fade = min(int(fade_ms * 1e-3 * sr), seg // 2)
+    win = np.ones(seg, dtype=np.float64)
+    if fade > 0:
+        ramp = 0.5 * (1.0 - np.cos(np.pi * np.arange(fade) / fade))
+        win[:fade] = ramp
+        win[-fade:] = ramp[::-1]
+    t = np.arange(seg, dtype=np.float64) / sr
+    segs = [np.sin(2.0 * np.pi * f * t) * win for f in freqs]
+    x = np.concatenate(segs)[:n_total]
+    return _peak_normalize(x.astype(np.float32), peak)
+
+
 def exp_sweep(
     f1: float,
     f2: float,
@@ -306,10 +344,13 @@ def build_training_excitation(cfg: DataConfig) -> np.ndarray:
     # Weights sum to 1; the DI (if present) takes its own share.
     di_path = Path("C:/Users/nicks/Documents/Projekte/VolterraGuitar/assets/guitar_di_loop.wav")
     has_di = di_path.exists()
-    # Relative time budget per component (pre-staircase, before /n_levels).
-    weights = {"pink": 0.30, "white": 0.20, "multisine": 0.20, "sweep": 0.15}
+    # Relative time budget per component (pre-staircase, before /n_levels). The
+    # isolated-tone bank uniquely constrains the per-tone harmonic structure
+    # (prevents the model inventing overtones a band-limited circuit lacks), which
+    # noise / multisine / sweep under-determine.
+    weights = {"pink": 0.25, "white": 0.15, "multisine": 0.18, "sweep": 0.14, "tones": 0.16}
     if has_di:
-        weights["di"] = 0.15
+        weights["di"] = 0.12
     total_w = sum(weights.values())
     weights = {k: v / total_w for k, v in weights.items()}
 
@@ -321,8 +362,9 @@ def build_training_excitation(cfg: DataConfig) -> np.ndarray:
     white = noise(secs("white"), sr, color="white", seed=cfg.seed + 1, peak=1.0)
     ms = multisine(secs("multisine"), sr, seed=cfg.seed + 2, peak=1.0)
     sweep, _inv = exp_sweep(20.0, 0.45 * sr, secs("sweep"), sr, peak=1.0)
+    tb = tone_bank(secs("tones"), sr)
 
-    components = [pink, white, ms, sweep]
+    components = [pink, white, ms, sweep, tb]
     if has_di:
         di = load_di(str(di_path), sr, peak=1.0)
         # Trim/replicate DI to its budget so it does not dominate the total.

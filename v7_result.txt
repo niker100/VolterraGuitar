@@ -1,0 +1,2 @@
+ep 34 loss 0.6976 held48k 0.8668 best 0.7893 t 227 params 4918
+DONE best48k 0.7893 params 4918

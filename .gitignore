@@ -29,3 +29,6 @@ runs/
 stored.pckl
 volterra_nn_model.h5
 *.h5
+
+# --- Claude Code local state (runtime lock, session scratch) ---
+.claude/

@@ -50,6 +50,7 @@ MODEL_COLORS = {
     "rnn": OKABE_ITO["orange"],
     "ssm": OKABE_ITO["purple"],
     "circe": OKABE_ITO["purple"],  # the conditioned hero model
+    "circe3": OKABE_ITO["purple"],  # the SOTA hero model
 }
 
 # Fixed colormap roles (one meaning each).
@@ -117,22 +118,28 @@ def fig_dataset(x: np.ndarray, y: np.ndarray, sr: int, name: str = "") -> Figure
 def fig_transfer(x_probe: np.ndarray, y_ref: np.ndarray, preds: dict[str, np.ndarray],
                  name: str = "") -> Figure:
     """Output-vs-input curve for a slow sweep: the circuit's nonlinear shape
-    (black) with each model overlaid. Loop width = memory; mismatch = error."""
+    (black) with each model overlaid (top), plus the signed residual model-circuit
+    vs input (bottom). Loop width = memory; the residual exposes exactly where a
+    model deviates — the clipping knee and the upper/lower clip branches."""
     x_probe = np.asarray(x_probe, dtype=np.float64)
     y_ref = np.asarray(y_ref, dtype=np.float64)
-    fig, ax = plt.subplots(figsize=(5.4, 4.6))
+    fig, (ax, axr) = plt.subplots(
+        2, 1, figsize=(5.6, 5.6), sharex=True, gridspec_kw={"height_ratios": [3.0, 1.0]}
+    )
     ax.plot(x_probe, y_ref, color="k", lw=2.2, label="circuit", zorder=3)
     for mname, yp in preds.items():
-        ax.plot(x_probe, np.asarray(yp, dtype=np.float64), color=color_for(mname),
-                lw=1.1, alpha=0.9, label=mname, zorder=2)
+        yp = np.asarray(yp, dtype=np.float64)
+        ax.plot(x_probe, yp, color=color_for(mname), lw=1.1, alpha=0.9, label=mname, zorder=2)
+        axr.plot(x_probe, yp - y_ref, color=color_for(mname), lw=0.9, alpha=0.9)
     # Crop to the circuit's range: polynomial models (Volterra/WH) can diverge
     # outside their trained amplitude; clipping keeps the in-range shape legible
     # (a model leaving the frame is itself the diagnostic).
     lim = 1.4 * float(np.max(np.abs(y_ref))) or 1.0
     ax.set_ylim(-lim, lim)
-    ax.set(title=f"{name} static transfer  (output vs input)", xlabel="input (V)",
-           ylabel="output (V)")
+    ax.set(title=f"{name} static transfer  (output vs input)", ylabel="output (V)")
     ax.legend(loc="upper left", fontsize=8, ncol=2)
+    axr.axhline(0, color="k", lw=0.6)
+    axr.set(xlabel="input (V)", ylabel="resid.")
     fig.tight_layout()
     return fig
 
@@ -159,20 +166,159 @@ def _harmonic_levels(y: np.ndarray, sr: int, f0: float, n_harm: int) -> np.ndarr
 def fig_harmonics(y_ref: np.ndarray, preds: dict[str, np.ndarray], sr: int,
                   f0: float = 1000.0, n_harm: int = 12, name: str = "") -> Figure:
     """Harmonic stack of a pure ``f0`` tone: level (dB, relative to the
-    fundamental) at each harmonic for the circuit (black) and each model. A model
-    that tracks the circuit's stack reproduces the distortion; one that drops to
-    the floor (e.g. a linear fit) adds no harmonics."""
+    fundamental) at each harmonic for the circuit (black) and each model (top),
+    plus the per-harmonic error model-circuit in dB (bottom). The stack shows the
+    circuit's resonant **formants** (peaks/notches = its poles/zeros); the error
+    panel makes the formant match precise — a flat line near 0 dB means the model
+    reproduced the formant structure, a spike means it missed that resonance."""
     ks = np.arange(1, n_harm + 1)
-    fig, ax = plt.subplots(figsize=(8.0, 3.8))
-    ax.plot(ks, _harmonic_levels(y_ref, sr, f0, n_harm), "o-", color="k", lw=1.8,
-            ms=5, label="circuit", zorder=3)
+    ref_lv = _harmonic_levels(y_ref, sr, f0, n_harm)
+    fig, (ax, axe) = plt.subplots(
+        2, 1, figsize=(8.0, 5.0), sharex=True, gridspec_kw={"height_ratios": [2.4, 1.0]}
+    )
+    ax.plot(ks, ref_lv, "o-", color="k", lw=1.8, ms=5, label="circuit", zorder=3)
     for mname, yp in preds.items():
-        ax.plot(ks, _harmonic_levels(yp, sr, f0, n_harm), "o-", color=color_for(mname),
-                lw=1.0, ms=4, alpha=0.85, label=mname, zorder=2)
-    ax.set(title=f"{name} harmonic stack of a {f0:.0f} Hz tone", xlabel="harmonic",
-           ylabel="level rel. fundamental (dB)", ylim=(-90, 5), xticks=ks)
+        lv = _harmonic_levels(yp, sr, f0, n_harm)
+        ax.plot(ks, lv, "o-", color=color_for(mname), lw=1.0, ms=4, alpha=0.85,
+                label=mname, zorder=2)
+        # Error only where the circuit harmonic is above the noise floor (-110 dB);
+        # comparing two floor values is meaningless and would spike the panel.
+        err = np.where(ref_lv > -110.0, lv - ref_lv, np.nan)
+        axe.plot(ks, err, "o-", color=color_for(mname), lw=1.0, ms=4, alpha=0.9)
+    ax.set(title=f"{name} harmonic stack of a {f0:.0f} Hz tone", ylim=(-90, 5))
+    ax.set_ylabel("level rel. fund. (dB)")
     ax.legend(loc="upper right", fontsize=8, ncol=2)
+    axe.axhline(0, color="k", lw=0.6)
+    axe.set(xlabel="harmonic", ylabel="err (dB)", xticks=ks)
     fig.tight_layout()
+    return fig
+
+
+# --- transfer-curve family across drives -------------------------------------
+def fig_transfer_family(curves: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, bool]],
+                        name: str = "") -> Figure:
+    """Static transfer curves (output vs input) at several drives as small
+    multiples — circuit (black) vs CIRCE3 (hero) — showing the **Transferkennlinie
+    is matched across the whole operating range**. Held-out (unseen) drives are
+    marked; CIRCE3 reproduces them exactly by input-scaling. Each ``curves`` entry
+    is ``(drive_label, x_probe, y_ref, y_pred, is_held)``."""
+    n = max(len(curves), 1)
+    fig, axes = plt.subplots(1, n, figsize=(3.0 * n, 3.2), squeeze=False)
+    for ax, (label, x, yref, yp, held) in zip(axes[0], curves, strict=False):
+        x = np.asarray(x, np.float64)
+        yref = np.asarray(yref, np.float64)
+        ax.plot(x, yref, color="k", lw=2.0, label="circuit", zorder=3)
+        ax.plot(x, np.asarray(yp, np.float64), color=color_for("circe3"), lw=1.1,
+                alpha=0.9, label="CIRCE3", zorder=2)
+        lim = 1.4 * float(np.max(np.abs(yref))) or 1.0
+        ax.set_ylim(-lim, lim)
+        tag = "  (held-out)" if held else ""
+        ax.set(title=f"drive {label}{tag}", xlabel="input (V)")
+        if ax is axes[0][0]:
+            ax.set_ylabel("output (V)")
+            ax.legend(loc="upper left", fontsize=8)
+    fig.suptitle(f"{name} static transfer across drives  (one CIRCE3, input-scaling)",
+                 fontsize=10)
+    fig.tight_layout()
+    return fig
+
+
+# --- spectral fidelity (the formant / pole-zero envelope) --------------------
+def fig_spectrum(y_ref: np.ndarray, preds: dict[str, np.ndarray], sr: int,
+                 name: str = "", fmin: float = 20.0) -> Figure:
+    """Welch magnitude spectrum (dB) of the circuit (black) vs each model on a
+    **log-frequency** axis — the resonant **formant envelope** (poles → peaks,
+    zeros → notches) made directly visible — with the model-circuit error (dB)
+    below. Driven by a broadband / DI probe so the *whole* transfer-shaped
+    spectrum shows (a single tone would only reveal its own harmonics)."""
+    from scipy.signal import welch
+
+    nper = int(min(8192, len(y_ref)))
+
+    def psd_db(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        f, p = welch(np.asarray(y, np.float64), fs=sr, nperseg=nper, noverlap=nper // 2)
+        return f, 10.0 * np.log10(p + 1e-20)
+
+    fr, ref = psd_db(y_ref)
+    sel = fr >= fmin
+    fig, (ax, axe) = plt.subplots(
+        2, 1, figsize=(8.2, 5.2), sharex=True, gridspec_kw={"height_ratios": [2.4, 1.0]}
+    )
+    ax.semilogx(fr[sel], ref[sel], color="k", lw=2.0, label="circuit", zorder=3)
+    for mname, yp in preds.items():
+        _, p = psd_db(yp)
+        ax.semilogx(fr[sel], p[sel], color=color_for(mname), lw=1.1, alpha=0.9,
+                    label=mname, zorder=2)
+        axe.semilogx(fr[sel], (p - ref)[sel], color=color_for(mname), lw=0.9, alpha=0.9)
+    ax.set(title=f"{name} magnitude spectrum  (formant / pole-zero envelope)",
+           ylabel="power (dB)")
+    ax.legend(loc="lower left", fontsize=8, ncol=2)
+    axe.axhline(0, color="k", lw=0.6)
+    axe.set(xlabel="frequency (Hz)", ylabel="err (dB)", ylim=(-18, 18))
+    for a in (ax, axe):
+        a.set_xlim(fmin, sr / 2)
+        a.set_xticks([50, 100, 500, 1000, 5000, 10000, 20000])
+        a.set_xticklabels(["50", "100", "500", "1k", "5k", "10k", "20k"])
+    fig.tight_layout()
+    return fig
+
+
+def fig_aliasing(y_ref: np.ndarray, preds: dict[str, np.ndarray], sr: int,
+                 f0: float = 2500.0, name: str = "") -> Figure:
+    """Line spectrum of a single high ``f0`` tone driven hard: the band-limited
+    circuit (black) shows only harmonics (dotted guides) over a quiet floor; a
+    base-rate model adds **inharmonic alias spurs** between them (its >Nyquist
+    harmonics folded back), while an oversampled model suppresses them. The clearest
+    view of why internal oversampling matters for spectral fidelity."""
+    fig, ax = plt.subplots(figsize=(9.5, 4.2))
+
+    def line_db(y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        y = np.asarray(y, np.float64)
+        if y.shape[0] > 2048:
+            y = y[2048:]  # drop warm-up
+        mag = np.abs(np.fft.rfft(y * np.hanning(y.shape[0])))
+        f = np.fft.rfftfreq(y.shape[0], 1.0 / sr)
+        return f, 20.0 * np.log10(mag / (mag.max() + 1e-30) + 1e-12)
+
+    f, ref = line_db(y_ref)
+    ax.plot(f, ref, color="k", lw=1.5, label="circuit (alias-free)", zorder=3)
+    for mname, yp in preds.items():
+        ax.plot(*line_db(yp), color=color_for(mname), lw=1.0, alpha=0.85, label=mname, zorder=2)
+    for k in range(1, int(sr / 2 / f0) + 1):
+        ax.axvline(k * f0, color="k", ls=":", lw=0.5, alpha=0.25)
+    ax.set(title=f"{name} {f0 / 1000:g} kHz tone — oversampling removes the model's self-aliasing",
+           xlabel="frequency (Hz)", ylabel="magnitude (dB, rel. peak)",
+           xlim=(0, sr / 2), ylim=(-90, 3))
+    ax.legend(loc="upper right", fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_spectrogram_compare(y_ref: np.ndarray, y_model: np.ndarray, sr: int,
+                            name: str = "", model_name: str = "circe3") -> Figure:
+    """Three time-frequency panels: circuit, model, and the **dB difference**
+    (model-circuit, diverging) — shows exactly *where* in time and frequency the
+    model adds or loses energy. A near-white difference panel = a faithful match."""
+    from scipy.signal import stft
+
+    n = int(min(len(y_ref), len(y_model)))
+    f, t, sr_ = stft(np.asarray(y_ref[:n], np.float64), fs=sr, nperseg=1024, noverlap=768)
+    _, _, sm_ = stft(np.asarray(y_model[:n], np.float64), fs=sr, nperseg=1024, noverlap=768)
+    lr = 20.0 * np.log10(np.abs(sr_) + 1e-8)
+    lm = 20.0 * np.log10(np.abs(sm_) + 1e-8)
+    diff = np.where((lr < -110.0) & (lm < -110.0), np.nan, lm - lr)
+
+    fig, ax = plt.subplots(1, 3, figsize=(12.5, 3.6), constrained_layout=True)
+    for a, lvl, ttl in ((ax[0], lr, "circuit"), (ax[1], lm, model_name)):
+        a.pcolormesh(t, f, lvl, cmap=CMAP_SPEC, vmin=-120, vmax=0, shading="auto")
+        a.set(title=ttl, xlabel="time (s)", ylabel="kHz")
+    im = ax[2].pcolormesh(t, f, diff, cmap=CMAP_SIGNED, vmin=-24, vmax=24, shading="auto")
+    ax[2].set(title=f"{model_name} - circuit (dB)", xlabel="time (s)", ylabel="kHz")
+    fig.colorbar(im, ax=ax[2], shrink=0.85, label="dB")
+    for a in ax:
+        a.set_yticks([0, 5000, 10000, 15000, 20000], ["0", "5", "10", "15", "20"])
+        a.grid(False)
+    fig.suptitle(f"{name} spectrogram comparison", fontsize=10)
     return fig
 
 

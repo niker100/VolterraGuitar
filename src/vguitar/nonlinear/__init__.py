@@ -1,8 +1,8 @@
-"""Static-nonlinearity tools: antiderivative anti-aliasing (ADAA).
+"""Static-nonlinearity tools: ADAA (antiderivative-antialiased) waveshapers.
 
 This subpackage holds the memoryless waveshapers and their alias-suppressing
 evaluation used by the block-oriented (Wiener-Hammerstein) model and the realtime
-path. See :mod:`vguitar.nonlinear.adaa` for the method and references.
+path (see :mod:`vguitar.nonlinear.adaa`).
 """
 
 from __future__ import annotations

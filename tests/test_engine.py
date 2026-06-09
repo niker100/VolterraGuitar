@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from vguitar.models.circe import CIRCE
+from vguitar.models.circe3 import CIRCE3
 from vguitar.realtime.engine import _control_for_block, render_file
 
 
@@ -36,12 +36,12 @@ def test_control_for_block_modes() -> None:
 
 # --- render_file with control ----------------------------------------------
 @pytest.fixture(scope="module")
-def model() -> CIRCE:
+def model() -> CIRCE3:
     # Untrained is fine: render equivalence is about deterministic streaming, not accuracy.
-    return CIRCE(n_control=1, channels=6, n_blocks=1, n_layers=4)
+    return CIRCE3(n_control=1, channels=6, n_blocks=1, n_layers=4)
 
 
-def test_render_constant_vector_equals_callable(model: CIRCE, tmp_path) -> None:
+def test_render_constant_vector_equals_callable(model: CIRCE3, tmp_path) -> None:
     inp = _write_wav(tmp_path / "in.wav")
     a, b = tmp_path / "a.wav", tmp_path / "b.wav"
     render_file(model, inp, str(a), sr=8000, control=np.array([1.5], np.float32))
@@ -49,14 +49,14 @@ def test_render_constant_vector_equals_callable(model: CIRCE, tmp_path) -> None:
     assert np.allclose(_read(a), _read(b), atol=1e-6)
 
 
-def test_render_length_and_none_control(model: CIRCE, tmp_path) -> None:
+def test_render_length_and_none_control(model: CIRCE3, tmp_path) -> None:
     inp = _write_wav(tmp_path / "in.wav", n=3333)
     out = tmp_path / "o.wav"
     render_file(model, inp, str(out), sr=8000, control=None)  # unconditioned path
     assert _read(out).shape[0] == 3333
 
 
-def test_render_schedule_matches_manual_loop(model: CIRCE, tmp_path) -> None:
+def test_render_schedule_matches_manual_loop(model: CIRCE3, tmp_path) -> None:
     """render_file with a knob automation == a manual block loop feeding the same
     per-block control to process_block (the wiring is exact)."""
     inp = _write_wav(tmp_path / "in.wav")
@@ -83,7 +83,7 @@ def test_render_schedule_matches_manual_loop(model: CIRCE, tmp_path) -> None:
     assert np.allclose(got, _read(man_path), atol=1e-6)
 
 
-def test_live_engine_constructs_with_control_fn(model: CIRCE) -> None:
+def test_live_engine_constructs_with_control_fn(model: CIRCE3) -> None:
     from vguitar.config import RealtimeConfig
     from vguitar.realtime.engine import LiveEngine
 

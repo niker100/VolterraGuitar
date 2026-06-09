@@ -57,6 +57,7 @@ class _GatedLayer(nn.Module):
 
     def __init__(self, channels: int, kernel: int, dilation: int) -> None:
         super().__init__()
+        self.channels = channels
         self.pad = dilation * (kernel - 1)
         self.conv = nn.Conv1d(channels, 2 * channels, kernel, dilation=dilation)
         self.res = nn.Conv1d(channels, channels, 1)
@@ -67,6 +68,79 @@ class _GatedLayer(nn.Module):
         a, b = h.chunk(2, dim=1)
         g = torch.tanh(a) * torch.sigmoid(b)
         return x + self.res(g), self.skip(g)
+
+
+class _MixedActivation(nn.Module):
+    """Heterogeneous per-channel activation: 5 groups, each a DIFFERENT function.
+
+    The channels are split into five (near-)equal groups carrying ``tanh`` (smooth
+    saturation), ``gelu`` (smooth gate), ``relu`` (one-sided corner), ``abs``
+    (V-shaped corner — a natural fit for a symmetric dead-zone), and Snake
+    ``x + sin(alpha*x)^2 / alpha`` (periodic / harmonic folding; per-channel
+    learnable ``alpha`` clamped >= 0.1 so the ``1/alpha`` scale never explodes).
+
+    A smooth (Lipschitz) ``tanh``/``sigmoid`` gate cannot represent a *corner*
+    (a slope discontinuity) without enormous capacity; giving every layer
+    ``abs``/``relu``/Snake units lets the net synthesize the kink natively while
+    the smooth units round the conducting region. The layer's downstream ``1x1``
+    convs recombine the heterogeneous groups, so the net can also *suppress* the
+    corner units where they are not needed (smooth circuits) — which is why this
+    does not regress on smooth transfer curves the way an input-level rectified
+    feature basis does.
+    """
+
+    def __init__(self, channels: int) -> None:
+        super().__init__()
+        base = channels // 5
+        # tanh, gelu, relu, abs, snake (snake gets the remainder)
+        self.sizes = (base, base, base, base, channels - 4 * base)
+        self.alpha = nn.Parameter(torch.ones(self.sizes[4]))
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:  # (B, C, T) -> (B, C, T)
+        s = self.sizes
+        i0, i1, i2, i3 = s[0], s[0] + s[1], s[0] + s[1] + s[2], s[0] + s[1] + s[2] + s[3]
+        sn = h[:, i3:]
+        al = self.alpha.clamp(min=0.1).view(1, -1, 1)
+        return torch.cat(
+            [
+                torch.tanh(h[:, :i0]),
+                nn.functional.gelu(h[:, i0:i1]),
+                torch.relu(h[:, i1:i2]),
+                torch.abs(h[:, i2:i3]),
+                sn + torch.sin(al * sn) ** 2 / al,
+            ],
+            dim=1,
+        )
+
+
+class _MixedLayer(nn.Module):
+    """A WaveNet residual+skip layer whose gate is :class:`_MixedActivation`.
+
+    Drop-in for :class:`_GatedLayer` (same constructor signature, same ``forward``
+    contract returning ``(residual, skip)``) but the dilated conv emits ``channels``
+    (not ``2*channels``) features, which the heterogeneous activation transforms
+    before the ``1x1`` residual/skip projections. Used by CIRCE3 when
+    ``block_act='mixed'`` to add corner-capacity for sharp-discontinuity circuits.
+    """
+
+    def __init__(self, channels: int, kernel: int, dilation: int) -> None:
+        super().__init__()
+        self.channels = channels
+        self.pad = dilation * (kernel - 1)
+        self.conv = nn.Conv1d(channels, channels, kernel, dilation=dilation)
+        self.act = _MixedActivation(channels)
+        self.res = nn.Conv1d(channels, channels, 1)
+        self.skip = nn.Conv1d(channels, channels, 1)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        g = self.act(self.conv(nn.functional.pad(x, (self.pad, 0))))
+        return x + self.res(g), self.skip(g)
+
+
+def _mixed_sizes(channels: int) -> tuple[int, int, int, int, int]:
+    """Group sizes for :class:`_MixedActivation` (tanh, gelu, relu, abs, snake)."""
+    base = channels // 5
+    return (base, base, base, base, channels - 4 * base)
 
 
 class _TCNNet(nn.Module):
