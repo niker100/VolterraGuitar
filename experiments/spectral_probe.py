@@ -60,10 +60,12 @@ class _SpectralHybridNet(nn.Module):
     window: torch.Tensor
 
     def __init__(self, channels: int, n_layers: int, kernel: int = 3,
-                 n_fft: int = N_FFT, hop: int = HOP, use_spectral: bool = True) -> None:
+                 n_fft: int = N_FFT, hop: int = HOP, use_spectral: bool = True,
+                 spec_hidden: int = 256) -> None:
         super().__init__()
         self.use_spectral = use_spectral
         self.n_fft, self.hop = n_fft, hop
+        self.spec_hidden = spec_hidden
         # --- time head: a mixed-activation TCN (the waveshaper) ---
         self.input = nn.Conv1d(1, channels, 1)
         self.layers = nn.ModuleList(_MixedLayer(channels, kernel, 2**i) for i in range(n_layers))
@@ -73,7 +75,7 @@ class _SpectralHybridNet(nn.Module):
         # --- spectral branch: per-frame complex gain predicted from the magnitude ---
         if use_spectral:
             nbins = n_fft // 2 + 1
-            hidden = 256
+            hidden = spec_hidden
             self.spec = nn.Sequential(
                 nn.Linear(nbins, hidden), nn.ReLU(), nn.Linear(hidden, 2 * nbins)
             )
@@ -121,12 +123,13 @@ class SpectralHybrid(CIRCE3):
     name = "spectral_hybrid"
 
     def __init__(self, channels: int = 24, n_layers: int = 9, use_spectral: bool = True,
-                 device: str = "cpu", **kw: Any) -> None:
+                 spec_hidden: int = 256, device: str = "cpu", **kw: Any) -> None:
         super().__init__(n_control=1, signal_idx=(0,), channels=channels,
                          n_blocks=1, n_layers=1, oversample=1, device=device, **kw)
         self.use_spectral = use_spectral
         self._nl = n_layers
-        self.net = _SpectralHybridNet(channels, n_layers, use_spectral=use_spectral).to(self.device)
+        self.net = _SpectralHybridNet(channels, n_layers, use_spectral=use_spectral,
+                                      spec_hidden=spec_hidden).to(self.device)
 
     def process(self, x: np.ndarray, c: np.ndarray | None = None) -> np.ndarray:
         self.net.eval()
