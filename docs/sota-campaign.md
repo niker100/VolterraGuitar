@@ -161,3 +161,28 @@ complementary log-spectral/harmonic-match metric rather than gating on 0.005.
   (no torchaudio; self-test matches a sequential reference to 2.4e-7). Costs +100
   params, input-scaling-equivariant, streamable. A/B (state on/off, OS1) on
   hysteretic_fuzz + crossover + bjt guard — launches when the GPU frees up.
+- **2026-06-09 — Campaign 2 RESULT: the DC fix works; `dcblock_fc=0` is the new
+  default.** dcblock_off vs on (single seed, current code). **asym_clipper 0.0523 →
+  0.0007** (75× — cracked, the diagnosis confirmed). **wavefolder 0.200 → 0.126**
+  (DC artifact removed; 0.126 genuine fold residual remains). fullwave 0.0089 →
+  0.0074. Symmetric circuits within seed noise (jfet 0.0097 flat, ts 0.0137→0.0145,
+  crossover 0.0219→0.0233, hard_clipper 0.0911→0.0940, hysteretic 0.0273→0.0280,
+  bjt 0.0045↔0.0046). Adopt dcblock_off (faithful DC reproduction; cracks asym, helps
+  the DC-bearing circuits, neutral elsewhere). Fig: `sota_dc_rebaseline.png`.
+
+### Post-DC-fix leaderboard (current-code, dcblock_off, 1 seed) — the remaining work
+
+| circuit | held-ESR | under 0.005? | remaining lever |
+|---|---|---|---|
+| asym_clipper | 0.0007 | ✅ | done |
+| bjt | 0.0046 | ✅ | done |
+| fullwave_rectifier | 0.0074 | ❌ (near) | depth / data / seed |
+| jfet | 0.0097 | ❌ (near) | depth / data / seed |
+| tube_screamer | 0.0145 | ❌ | depth / data |
+| crossover | 0.0233 | ❌ | learnable corners (rank-3) / depth |
+| hysteretic_fuzz | 0.0280 | ❌ | IIR memory (rank-2, running) |
+| hard_clipper | 0.0940 | ❌ | learnable corners + depth (rank-3/4) |
+| wavefolder | 0.1259 | ❌ | spectral-bias wall — grey-box (rank-5) or report complementary metric |
+
+2/9 under 0.005. Next: rank-2 IIR (running) for hysteretic; rank-3 learnable corners
+for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
