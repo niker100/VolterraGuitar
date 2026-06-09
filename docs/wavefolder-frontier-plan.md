@@ -207,3 +207,55 @@ returns — that result tells us whether the wavefolder residual is even reachab
 CIRCE-X as a new experimental model (`models/circex.py`), streaming-contract-tested,
 default-off; integrate into CIRCE3 only the branches an ablation proves carry
 generalization (the project's retire-what-doesn't-help discipline).
+
+## Step 3 — spectral-domain (STFT) hybrid: complex filtering + a time-domain head
+
+User direction (high priority, AFTER CIRCE-X): *"maybe we need to be more aggressive
+than a simple TCN — an FFT, then multiplication in the spectral domain (= convolution
+in time), then IFFT, with a head for purely time-based processing. Carefully
+engineered: complex-valued network, real-time, probably STFT with different lengths."*
+
+**Why it's well-motivated (not just novelty):** these circuits are a *linear filter*
+∘ *instantaneous nonlinearity* ∘ *linear filter* (tone stacks, coupling caps, output
+RC — the formants/poles-zeros) wrapped around diode/tube waveshaping. The **linear**
+parts are *long* convolutions — cheap and exact as a **complex multiply per STFT
+bin** — exactly the **formant/transfer fidelity** a time-domain TCN smooths (our
+documented residual). The **nonlinear** part is *time-local* waveshaping — natural
+for a small time-domain head. So the right shape is a **hybrid**:
+
+```
+x ─┬─ STFT(multi-len) ─ complex per-bin/per-frame net ─ ISTFT ─┐
+   └─ time-domain head (TCN waveshaper, instantaneous NL) ──────┴─ fuse ─ y
+```
+
+**The three engineering constraints the user flagged — design notes:**
+
+1. **Pure spectral multiplication is LINEAR (LTI).** A static complex mask = one
+   fixed linear filter; it cannot create harmonics. For a *nonlinear* circuit the
+   spectral processing must be **input-dependent**: a complex-valued net maps the
+   frame spectrum (and/or a conditioning feature) to a per-frame complex
+   transform ("deep filtering" / learned time-varying filter). The harmonic
+   *generation* still comes from the time-domain head; the spectral branch carries
+   the **linear formant/memory** structure. Keep that division of labour explicit.
+2. **Complex-valued network.** Implement as split real/imag (2 real channels) with
+   complex-aware ops (complex linear = the 2×2 real block; `modReLU`/`CReLU`
+   activations; magnitude-phase only where it helps), or torch native `cfloat`.
+   Start with the simplest that trains stably (split-real linear + modReLU).
+3. **Real-time + STFT.** STFT framing imposes **latency ≈ window length** (the
+   resolution↔latency tradeoff is fundamental). Use **overlap-add / overlap-save**
+   blocked STFT for streaming-exactness, report the window as `latency_samples`
+   (like the OS group delay). **Multi-length STFT** (e.g. 256/1024/4096) = a
+   multi-resolution branch (short window → time/transient precision, long window →
+   frequency/formant precision), fused — the analysis twin of `multi_stft_loss`.
+   The longest window sets the latency budget; cap it to stay playable (≤~10 ms?).
+
+**Plan:** prototype `_SpectralBranch` (single window first, then multi-len),
+validate (a) it improves **formant/transfer fidelity** on bjt/jfet/tube_screamer
+(the spectral-fidelity metrics: formant-peak err, transfer-RMSE, band>4k ESR) and
+(b) streaming-exactness via overlap-add, **before** any fusion. Then A/B the
+**hybrid (spectral + time head)** vs the plain time-domain default across the suite,
+held-ESR + the spectral metrics + RTF + latency. It can also slot in as an extra
+CIRCE-X branch. Honest bar: it must improve *spectral* fidelity (its reason to
+exist) without losing real-time or regressing the time-domain wins — else it's a
+documented null. Build as `experiments/spectral_probe.py` first (offline torch),
+promote to a streaming model only if it earns it.
