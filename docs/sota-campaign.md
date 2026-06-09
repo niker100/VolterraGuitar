@@ -72,3 +72,18 @@ a uniform config, with smooth-circuit regression guards throughout.
   (+rect bank `(0.1,0.3,0.6,1.0)` + Fourier head) vs `rect_shaper_big` (+ch40).
   Single seed for fast triage; winner gets a multi-seed full-suite run.
   *Question: do the structural priors crack the wall, or is it capacity/OS/data?*
+- **2026-06-09 — Campaign 1 RESULT: cheap levers + capacity are INERT on the wall.**
+  base reproduces the baseline (wavefolder 0.185, hard_clipper 0.089, asym 0.052,
+  bjt 0.0046 ✓). `rect_shaper` (rect bank `(0.1,0.3,0.6,1.0)` + Fourier head) was
+  flat-to-worse everywhere (wavefolder 0.185→0.192); the Fourier head matches a
+  prior *rejected* result, and the rect bank likely sits at the wrong input-volt
+  scale (hard_clipper's nominal input ≈ ±0.3 V, so thresholds 0.6/1.0 never fire).
+  `+ch40` was inert (wavefolder/asym flat, bjt 0.0046→0.0043) and **destabilizing**
+  (hard_clipper diverged to 0.96). ⇒ The wall is **not** expressivity/capacity.
+  Decision: drop rect/Fourier/capacity; pivot to the two first-principles suspects,
+  **aliasing** and **loss-weighting**.
+- **2026-06-09 — Campaign 1b (`probe_wall`)** launched. asym_clipper + hard_clipper
+  × {base, os4, preemph2, stft01, stft03_pe2}, single seed. *Question: does more
+  oversampling (alias) or a harmonic-weighted loss (preemph2 / STFT) move them?*
+  (Note: numpy-twin RTF is 0.04–0.6× — a verification artifact, not deployable
+  inference speed; real-time characterization deferred until an ESR winner exists.)
