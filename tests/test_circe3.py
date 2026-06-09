@@ -187,6 +187,27 @@ def test_iir_state_preserves_input_scaling() -> None:
     assert np.max(np.abs(y_g - y_scaled)) < 1e-5
 
 
+def test_iir_state_tau_range(tmp_path) -> None:
+    """state_tau_s widens the one-pole tau init range, survives save/load, and keeps
+    streaming exact; old checkpoints without the key fall back to the default."""
+    torch.manual_seed(0)
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
+               n_state=4, state_tau_s=(5e-3, 2.0))
+    torch.manual_seed(0)
+    ref = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
+                 n_state=4)
+    # the slowest pole must sit closer to 1 than the default 500 ms one
+    assert float(torch.sigmoid(m.net.a_logit[-1])) > float(torch.sigmoid(ref.net.a_logit[-1]))
+    assert _const_stream_err(m, np.array([0.6], np.float32)) <= 1e-4
+    p = tmp_path / "tau.model"
+    m.save(p)
+    r = CIRCE3.load(p)
+    assert r.state_tau_s == (5e-3, 2.0)
+    x = np.random.default_rng(1).standard_normal(2048).astype(np.float32) * 0.3
+    c = np.array([0.6], np.float32)
+    assert np.max(np.abs(m.process(x, c) - r.process(x, c))) < 1e-6
+
+
 def test_varpro_training_streaming_exact() -> None:
     """VarPro training (closed-form readout solved by lstsq each step) produces a model
     that still streams bit-exact — out[3] stays a plain linear conv, set by the global

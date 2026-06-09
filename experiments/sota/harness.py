@@ -47,6 +47,11 @@ HARD = [k for k, v in CIRCUITS.items() if v[2] == "hard"]
 ALL = list(CIRCUITS)
 TARGET = 0.005  # the held-ESR bar that must hold on every circuit
 
+#: the unified production config (best uniform yet, 4/9 under 0.005) — the single
+#: source of truth every campaign driver builds on.
+UNIFIED: dict[str, Any] = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
+                           "dcblock_fc": 0.0, "n_state": 4}
+
 _DATA = Path("data")
 
 
@@ -55,7 +60,10 @@ def load_circuit(circuit: str) -> tuple[Dataset, Dataset, str]:
     return Dataset.load(_DATA / f"{sweep_nm}.npz"), Dataset.load(_DATA / f"{test_nm}.npz"), kind
 
 
-_TRAIN_KEYS = ("label", "varpro")  # config keys that are NOT CIRCE3 ctor args
+# config keys that are NOT CIRCE3 ctor args: campaign label + per-config training
+# overrides (a config dict can pin its own window/batch/lr/precision when the lever
+# under test needs it — e.g. a longer seq_len arm halves batch to hold GPU memory).
+_TRAIN_KEYS = ("label", "varpro", "seq_len", "batch_size", "lr", "amp")
 
 
 def build(cfg: dict[str, Any], device: str) -> CIRCE3:
@@ -87,6 +95,8 @@ def train_eval(
     epochs: int,
     device: str,
     batch_size: int = 12,
+    lr: float = 3e-3,
+    amp: bool = False,
 ) -> dict[str, Any]:
     """Train one uniform config on one circuit; return held-ESR + RTF + params."""
     tr, ts, kind = load_circuit(circuit)
@@ -96,8 +106,11 @@ def train_eval(
     model.fit(
         tr,
         ts,
-        TrainConfig(epochs=epochs, lr=3e-3, seq_len=4096, batch_size=batch_size,
-                    warmup=2048, seed=seed, varpro=cfg.get("varpro", False)),
+        TrainConfig(epochs=epochs, lr=cfg.get("lr", lr),
+                    seq_len=cfg.get("seq_len", 4096),
+                    batch_size=cfg.get("batch_size", batch_size),
+                    warmup=2048, seed=seed, amp=cfg.get("amp", amp),
+                    varpro=cfg.get("varpro", False)),
     )
     esr = held_esr(model, ts)
     return {
@@ -117,6 +130,8 @@ def run_campaign(
     epochs: int = 150,
     device: str = "cuda",
     batch_size: int = 12,
+    lr: float = 3e-3,
+    amp: bool = False,
 ) -> dict[str, Any]:
     """Train every (config x circuit x seed) cell serially, logging + persisting
     incrementally. Resumes from any existing ``outputs/sota/<name>.json`` so a
@@ -142,7 +157,7 @@ def run_campaign(
                 log(f"START {label:16s} {circuit:18s} seed{seed}")
                 try:
                     r = train_eval(circuit, cfg, seed=seed, epochs=epochs,
-                                   device=device, batch_size=batch_size)
+                                   device=device, batch_size=batch_size, lr=lr, amp=amp)
                     cell["held"].append(r["held"])
                     cell["secs"].append(r["secs"])
                     cell["rtf"] = r["rtf"]

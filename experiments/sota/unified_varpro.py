@@ -8,13 +8,11 @@ Run (background): uv run python -m experiments.sota.unified_varpro
 
 from __future__ import annotations
 
-from experiments.sota.harness import ALL, run_campaign
+from experiments.sota.harness import ALL, UNIFIED, run_campaign
 
-BASE = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
-        "dcblock_fc": 0.0, "n_state": 4}
 CONFIGS = [
-    {"label": "standard", **BASE},
-    {"label": "varpro", **BASE, "varpro": True},
+    {"label": "standard", **UNIFIED},
+    {"label": "varpro", **UNIFIED, "varpro": True},
 ]
 
 if __name__ == "__main__":

@@ -28,12 +28,11 @@ import torch
 
 from experiments.common import held_esr, make_log
 from experiments.sota.harness import CIRCUITS as HC
+from experiments.sota.harness import UNIFIED as MODEL
 from vguitar.config import TrainConfig
 from vguitar.data import Dataset
 from vguitar.models.circe3 import CIRCE3
 
-MODEL = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
-         "dcblock_fc": 0.0, "n_state": 4}
 # (label, batch, lr, amp). lr12+ diverged at b192 (round 1) — big batches stay at the
 # proven 9e-3. b96_amp vs b96_lr9 isolates the pure bf16 effect. OOM arms are skipped.
 ARMS = [

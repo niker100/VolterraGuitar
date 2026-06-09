@@ -267,6 +267,7 @@ class _CIRCE3Net(nn.Module):
         shaper_k: int = 8,
         n_state: int = 0,
         sr_state: int = 44_100,
+        state_tau_s: tuple[float, float] = (5e-3, 0.5),
     ) -> None:
         super().__init__()
         self.n_total = n_blocks * n_layers
@@ -280,10 +281,11 @@ class _CIRCE3Net(nn.Module):
         self.input = nn.Conv1d(_n_rect_feats(rect_thr) + n_state, channels, 1)
         # Leaky-integrator state channels: K learnable one-poles fed to the input
         # alongside x, giving unbounded memory the FIR stack lacks. tau init spans
-        # ~5..500 ms at the internal (oversampled) rate; a_k = sigmoid(logit) stays in
-        # (0,1). Linear in the gain-scaled input -> input-scaling-equivariant.
+        # state_tau_s (seconds, logspace, default 5..500 ms); a_k = sigmoid(logit)
+        # stays in (0,1). Linear in the gain-scaled input -> input-scaling-equivariant.
         if n_state > 0:
-            taus = torch.logspace(float(np.log10(5e-3)), float(np.log10(0.5)), n_state)
+            lo, hi = state_tau_s
+            taus = torch.logspace(float(np.log10(lo)), float(np.log10(hi)), n_state)
             a0 = torch.exp(-1.0 / (taus * sr_state)).clamp(1e-4, 1 - 1e-6)
             self.a_logit = nn.Parameter(torch.log(a0 / (1.0 - a0)))
             # Zero-init the state-channel input weights so the net starts IDENTICAL to
@@ -403,6 +405,7 @@ class CIRCE3(Model):
         shaper_k: int = 8,
         grad_clip: float = 1.0,
         n_state: int = 0,
+        state_tau_s: tuple[float, float] = (5e-3, 0.5),
         device: str = "cpu",
     ) -> None:
         if saturator not in ("clamp", "adaa1", "adaa2"):
@@ -440,6 +443,7 @@ class CIRCE3(Model):
         self.shaper_k = int(shaper_k)
         self.grad_clip = float(grad_clip)
         self.n_state = int(n_state)
+        self.state_tau_s = (float(state_tau_s[0]), float(state_tau_s[1]))
         self.device = torch.device(device)
         from vguitar import AUDIO_SR
 
@@ -456,6 +460,7 @@ class CIRCE3(Model):
             self.shaper_k,
             self.n_state,
             AUDIO_SR * self.oversample,
+            self.state_tau_s,
         ).to(self.device)
         self._stream: dict[str, Any] | None = None
 
@@ -482,6 +487,7 @@ class CIRCE3(Model):
             "shaper_k": self.shaper_k,
             "grad_clip": self.grad_clip,
             "n_state": self.n_state,
+            "state_tau_s": list(self.state_tau_s),
         }
 
     def _dc_ba(self) -> tuple[np.ndarray, np.ndarray]:

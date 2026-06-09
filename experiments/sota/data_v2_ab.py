@@ -18,6 +18,7 @@ from pathlib import Path
 import torch
 
 from experiments.common import held_esr, make_log
+from experiments.sota.harness import UNIFIED
 from vguitar.config import TrainConfig
 from vguitar.data import Dataset
 from vguitar.models.circe3 import CIRCE3
@@ -44,8 +45,7 @@ def _train_eval(sweep: str, test: str, seed: int = 0) -> float:
     ts = Dataset.load(f"data/{test}.npz")
     torch.manual_seed(seed)
     # the unified production config: depth L10 + IIR memory + dcblock_off + OS2
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=24, n_blocks=2, n_layers=10,
-               oversample=2, dcblock_fc=0.0, n_state=4, device="cuda")
+    m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **UNIFIED)
     m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=3e-3, seq_len=4096, batch_size=12,
                               warmup=2048, seed=seed))
     return held_esr(m, ts)
