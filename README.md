@@ -39,9 +39,12 @@ uv run vguitar live  --model tcn     # play guitar through it
 **CIRCE3** (`vguitar.models.circe3`) is the project's SOTA model, derived from
 approximation + information theory and confirmed by experiment (see
 [`docs/optimal-architecture.md`](docs/optimal-architecture.md)). It is a
-well-trained dilated gated **TCN** — the Boyd–Chua canonical realizer of a causal,
-time-invariant, fading-memory operator, unbeaten by any other backbone — with
-exogenous controls handled by their **physical kind**:
+well-trained dilated **TCN** — the Boyd–Chua canonical realizer of a causal,
+time-invariant, fading-memory operator, unbeaten by any other backbone — with a
+**heterogeneous mixed-activation block** by default (tanh/gelu/relu/abs/Snake
+units per layer, so corners are synthesizable where sharp circuits need them;
+`block_act="gated"` keeps the classic WaveNet gate) and exogenous controls handled
+by their **physical kind**:
 
 - **signal-acting** controls (drive / gain / sustain / level) are folded **directly
   into the input** as a gain, so the model reproduces *any* setting exactly by
@@ -58,8 +61,8 @@ formants and the static transfer curve), each a bigger lever than network size:
 - a **phase-aware pre-emphasis-ESR** training loss lifts the low-energy formant
   band into the gradient without the phase-blindness of a magnitude-STFT term, so
   it sharpens the formants *and* the transfer curve at once;
-- **internal 2× oversampling** (`oversample=2`) removes the gated nonlinearity's
-  self-aliasing — the dominant residual error — dropping realistic held-out ESR
+- **internal 2× oversampling** (`oversample=2`) removes the per-layer
+  nonlinearities' self-aliasing — the dominant residual error — dropping realistic held-out ESR
   **~8–25× (to ≈0.001 on guitar-DI)**, streaming-exact and still real-time.
 
 On **realistic (band-limited) signals** the shipped oversampled model reaches

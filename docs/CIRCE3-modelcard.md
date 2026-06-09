@@ -17,7 +17,7 @@ control, held-out (interpolated) settings, real-time:
 
 | control kind | testbed | conditioner | held-out ESR | real-time |
 |---|---|---|---|---|
-| **signal** (drive) | BJT (audio) | input-scaling | **0.0012 (guitar-DI), 0.006 (fp)** | ✅ RTF 2.3× (OS2) |
+| **signal** (drive) | BJT (audio) | input-scaling | **0.0012 (guitar-DI), 0.005 (fp)** | ✅ RTF 2.4× (OS2) |
 | **static-map** (β) | Duffing (non-audio) | FiLM + dense grid | **0.0023** (worst 0.0041) | ✅ |
 | **dynamics** (tone RC) | JFET (audio) | FiLM + dense grid | **0.0029** (worst 0.0033) | ✅ |
 
@@ -231,9 +231,9 @@ better):
 
 | circuit | CIRCE3 (OS2, grad-clip, 1 Hz DC-block) | tcn | volterra | wh | rnn |
 |---|---|---|---|---|---|
-| **bjt** (BJT overdrive) | **0.0057** (RTF 2.2×) | 0.290 | 0.217 | 0.643 | 1.03 |
-| **jfet** (square-law) | **0.0135** (RTF 2.2×) | 0.034 | 0.091 | 0.097 | 0.248 |
-| **tube_screamer** (op-amp + diode clipper) | **0.0137** (RTF 2.2×) | 0.062 | 0.161 | 0.171 | 0.209 |
+| **bjt** (BJT overdrive) | **0.0046** (RTF 2.4×) | 0.290 | 0.217 | 0.643 | 1.03 |
+| **jfet** (square-law) | **0.0093** (RTF 2.4×) | 0.034 | 0.091 | 0.097 | 0.248 |
+| **tube_screamer** (op-amp + diode clipper) | **0.0131** (RTF 2.4×) | 0.062 | 0.161 | 0.171 | 0.209 |
 
 (Lowering the output DC-blocker corner from 5 Hz to 1 Hz — it only ever needed to
 remove the asymmetric stages' true-DC silence offset — recovered the audible low
@@ -242,9 +242,9 @@ and it removed the transfer-curve vertical offset + hysteresis widening.)
 
 The oversampled CIRCE3 is the **best real-time architecture on all three
 circuits** — on the strongly-nonlinear bjt it is **tens of times more accurate than
-the strong TCN backbone** (0.0057 vs 0.29) and orders of magnitude ahead of the
+the strong TCN backbone** (0.0046 vs 0.29) and orders of magnitude ahead of the
 recurrent / classical models. On the **gently nonlinear jfet** it still wins by
-**~2.5×** (0.0135 vs 0.034) — while remaining a *single* model trained across the
+**~3.7×** (0.0093 vs 0.034) — while remaining a *single* model trained across the
 whole drive sweep, not a fixed-point specialist (the fixed-point baselines are
 pinned to one operating point, so their held-out error across the sweep is both
 higher and more seed-variable).
@@ -299,12 +299,12 @@ headline table above.)
 - **Multi-fold wavefolding is now the single hardest circuit** — the edge-case
   battery (`circuits/{fullwave_rectifier,hard_clipper,wavefolder,asym_clipper,
   crossover_classb,hysteretic_fuzz}.py`) is otherwise largely solved. Held-out ESR
-  at the shipping config (150 ep, OS2, grad-clip): crossover **0.026**,
-  fullwave-rectifier **0.009**, hysteretic-fuzz **0.028**, asym-clipper **0.052**,
+  at the shipping config (150 ep, OS2, grad-clip, mixed block): crossover **0.022**,
+  fullwave-rectifier **0.009**, hysteretic-fuzz **0.027**, asym-clipper **0.052**,
   hard-clipper **0.092**. The **class-B crossover dead-zone** that used to break the
   model (≈0.37 with the old config) is now well within range — gradient clipping,
   not the rectified-feature basis, was what fixed it (see *Gradient clipping*
-  above). The **multi-fold wavefolder remains the outlier (≈0.17)**: its many folds
+  above). The **multi-fold wavefolder remains the outlier (≈0.18)**: its many folds
   generate harmonics that alias even at 2× oversampling, so the residual is a
   real-time-bandwidth limit (a uniform model cannot raise oversampling per-circuit)
   rather than an optimization one. The opt-in rectified-feature basis
@@ -336,4 +336,5 @@ m = CIRCE3(n_control=2, signal_idx=(0,))   # col 0 = amplitude (signal), col 1 =
 
 Training auto-uses the GPU (`pick_device`); inference/RTF are measured on the CPU
 (`to_inference_cpu`) so the numbers reflect the deployment target. Shipped
-checkpoints: `assets/checkpoints/{bjt,duffing}.circe3.model`.
+checkpoints (mixed block, `assets/checkpoints/`):
+`{bjt,jfet,tube_screamer}.circe3.model`.
