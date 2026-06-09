@@ -1,10 +1,15 @@
-import time, sys, numpy as np, torch
+import sys
+import time
+
+import numpy as np
+import torch
 from torch import nn
-from vguitar.data import Dataset
-from vguitar.models.base import pick_device
+
 from vguitar import metrics as M
-from vguitar.models.circe3 import _segments
+from vguitar.data import Dataset
 from vguitar.losses import esr_loss, preemph_esr_loss
+from vguitar.models.base import pick_device
+from vguitar.models.circe3 import _segments
 
 SEED = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 NB = int(sys.argv[2]) if len(sys.argv) > 2 else 8

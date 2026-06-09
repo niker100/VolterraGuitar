@@ -1,7 +1,7 @@
-"""Train the spectral-operator zoo head-to-head + anchor baselines.
+﻿"""Train the spectral-operator zoo head-to-head + anchor baselines.
 
 Loads every variant Net from experiments/spectral_zoo/, wraps it in CIRCE3's
-training machinery (OS1, input-scaling, pre-emph+ESR loss, grad-clip — same harness
+training machinery (OS1, input-scaling, pre-emph+ESR loss, grad-clip â€” same harness
 as every other probe so the A/B is fair), trains on bjt (strong distortion) + jfet
 (mild), and reports held-ESR + high-band(>4k) ESR + params + an offline forward
 throughput RTF proxy. Anchored by the time-only mixed-TCN and the time+spectral
@@ -24,15 +24,15 @@ from typing import Any
 import numpy as np
 import torch
 
+from experiments.archive.spectral_probe import SpectralHybrid, _eval
 from experiments.common import load_pair, make_log
-from experiments.spectral_probe import SpectralHybrid, _eval
 from vguitar.config import TrainConfig
 from vguitar.models.circe3 import CIRCE3
 
 EPOCHS = 150
 CIRCUITS = [("bjt", "bjt_bench_sweep", "bjt_bench_fp_test", "strong"),
             ("jfet", "jfet_bench_sweep", "jfet_bench_fp_test", "mild")]
-ZOO_DIR = Path("experiments/spectral_zoo")
+ZOO_DIR = Path("experiments/archive/spectral_zoo")
 log = make_log("spectral_zoo_run")
 
 

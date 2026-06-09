@@ -1,4 +1,4 @@
-"""Deep-dive on the spectral-zoo leads: are the circuit-split wins robust + general?
+﻿"""Deep-dive on the spectral-zoo leads: are the circuit-split wins robust + general?
 
 The zoo found two cheap variants that each beat the hybrid on ONE circuit:
 stft_mix (best bjt, 24.5k params) and fft_longfir (best jfet, ~85x rtf), plus a
@@ -19,9 +19,9 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from experiments.archive.spectral_probe import _eval
+from experiments.archive.spectral_zoo_run import _build
 from experiments.common import load_pair, make_log
-from experiments.spectral_probe import _eval
-from experiments.spectral_zoo_run import _build
 from vguitar.config import TrainConfig
 
 EPOCHS = 150

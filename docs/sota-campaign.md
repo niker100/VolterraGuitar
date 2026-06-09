@@ -14,6 +14,59 @@ This is run as a series of GPU-bound **campaigns** through the reusable harness 
 stall-detectable, and resumable). Figures auto-render via
 `experiments/figures.py::fig_sota_campaign` to `outputs/figs/frontier/sota_*.png`.
 
+## Current state (living section — updated 2026-06-10)
+
+**Model (the unified config, best uniform yet — 4/9 under 0.005):** CIRCE3 =
+dilated causal TCN, ch24 / nb2 / L10 (RF ≈ 4093 samples), mixed activations
+(tanh/gelu/relu/abs/snake), input-scaling (signal controls fold into the input as
+gain) + zero-init FiLM for system controls, `n_state=4` learnable one-pole IIR
+memory channels (zero-init input weights; log-depth parallel scan in torch,
+carried `lfilter` state in the numpy twin), internal 2× oversampling,
+`dcblock_fc=0` (DC is real circuit output — the 1 Hz blocker was a train/eval
+artifact), clamp saturator, ~60k params. Loss: ESR + pre-emphasis ESR, grad-clip
+1.0. Streaming twin is bit-exact (`process == process_block`, tested).
+
+**Training:** AdamW, seq 4096, warmup 2048, 150 ep. `TrainConfig.varpro` solves
+the readout in closed form per step (fp32 ridge, Golub-Pereyra) — 2.5× faster /
+5× sharper on smooth circuits, but NOT uniform-safe (breaks discontinuity
+circuits). `TrainConfig.amp` = bf16 autocast (fp32 weights, IIR scan fp32).
+
+**Repo organization:** active experiment code = `experiments/sota/` (harness +
+campaign drivers) + `experiments/common.py` + `experiments/figures.py` +
+`experiments/final_numbers.py` + `experiments/check_runs.py` (stall detector).
+All completed pre-SOTA phases live in `experiments/archive/` (see its README
+for the script → verdict map). Decisions live here; numbers in `outputs/sota/`;
+figures in `outputs/figs/frontier/`.
+
+**Leaderboard (standard training, unified config, seed 0):** asym 0.0008 ✅,
+ts 0.0026 ✅, bjt 0.0044 ✅, jfet 0.0045 ✅ — then fullwave 0.0057, hysteretic
+0.0139, crossover 0.0154, hard_clipper 0.0578, wavefolder 0.245.
+
+**Prioritized tackle points:**
+1. **Adopt the fast training default** (`speed_ab`, running): interim — b96/lr9
+   fp32 *beats* control (jfet 0.0038 vs 0.0050) 1.4× faster; b96+bf16 matches
+   control at 2.1× speed; b192 diverges at lr12 and underconverges at lr9
+   (0.0079); b384 exceeds the card (WDDM swaps instead of OOM-ing — never again).
+2. **Data volume** (`data_v2_ab`, resumable): 3× data moved jfet 0.0053 → 0.0034
+   (−35%) — likely the cheapest lever for fullwave/crossover/hysteretic/
+   hard_clipper. Re-run on the adopted fast config.
+3. **fullwave 0.0057 (near):** multi-seed + data-v2 should cross it.
+4. **hysteretic 0.0139 (memory):** IIR lever validated (−29% at prototype);
+   probe n_state=8, longer τ-init range, seq_len 8192 (τ up to 440 ms vs 93 ms
+   training window).
+5. **hard_clipper 0.0578 (knee):** depth halved it once; next depth step needs
+   seq_len 8192 (RF would exceed the 4096 window) — combine with data-v2.
+6. **crossover 0.0154:** depth *hurts* it, IIR helps; data-v2 + IIR-width probe.
+7. **wavefolder 0.245 (spectral-bias wall):** grey-box learnable PWL/ADAA
+   waveshaper (reuse archived `PWLBank`) is the one untried structural lever;
+   if it fails uniform constraints, report the complementary metric honestly
+   (band-ESR / log-spectral) per the goal's "unless ESR is not the proper
+   metric" clause.
+8. **RTF re-measure, serially:** `unified_varpro` logged rtf ≈ 2.1 for several
+   varpro cells vs 0.08–0.17 for identical-architecture standard cells —
+   measurement contention (RTF sampled while the GPU/CPU was busy), as the user
+   predicted. Final RTF table must be measured with nothing else running.
+
 ## Where we start (the wall)
 
 Shipping CIRCE3 = input-scaling TCN (signal controls folded into input) + minimal

@@ -1,7 +1,7 @@
-"""What if we used ONLY the FFT branch (no time-domain head)?
+﻿"""What if we used ONLY the FFT branch (no time-domain head)?
 
-The spectral branch applies a magnitude-conditioned complex gain G·X to the
-EXISTING spectrum — a time-varying linear filter. It can reshape frequency content
+The spectral branch applies a magnitude-conditioned complex gain GÂ·X to the
+EXISTING spectrum â€” a time-varying linear filter. It can reshape frequency content
 that's present but cannot synthesize harmonics at bins where the input has no
 energy, which is exactly what a distortion nonlinearity must do. Prediction:
 spectral-only fails on overall ESR (worst on strongly-nonlinear bjt), confirming
@@ -21,8 +21,8 @@ from pathlib import Path
 
 import torch
 
+from experiments.archive.spectral_probe import SpectralHybrid, _eval
 from experiments.common import load_pair, make_log
-from experiments.spectral_probe import SpectralHybrid, _eval
 from vguitar.config import TrainConfig
 
 EPOCHS = 150

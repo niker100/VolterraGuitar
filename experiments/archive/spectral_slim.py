@@ -1,4 +1,4 @@
-"""Step 3 escalation — does the spectral-branch formant win survive a SLIM net?
+﻿"""Step 3 escalation â€” does the spectral-branch formant win survive a SLIM net?
 
 The prototype's spectral MLP was 422k params (513->256->1026); the win must survive
 a much smaller net to be real-time-affordable. Sweep the spectral hidden width on
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import torch
 
+from experiments.archive.spectral_probe import SpectralHybrid, _eval
 from experiments.common import load_pair, make_log
-from experiments.spectral_probe import SpectralHybrid, _eval
 from vguitar.config import TrainConfig
 
 EPOCHS = 150
