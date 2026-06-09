@@ -289,3 +289,37 @@ CIRCE-X branch. Honest bar: it must improve *spectral* fidelity (its reason to
 exist) without losing real-time or regressing the time-domain wins — else it's a
 documented null. Build as `experiments/spectral_probe.py` first (offline torch),
 promote to a streaming model only if it earns it.
+
+### Step 3 RESULT — the spectral branch WINS on formant fidelity (the first real swing)
+
+`experiments/spectral_probe.py` (`y = time_TCN(x) + ISTFT(G(|STFT(x)|)⊙STFT(x))`,
+n_fft=1024/hop=256, OS1, same harness; spectral ON vs OFF):
+
+| circuit | overall ESR | **band>4k ESR (the formant target)** |
+|---|---|---|
+| bjt [smooth] | 0.0299 → 0.0221 (**−26%**) | 0.0545 → 0.0377 (**−31%**) |
+| jfet [smooth] | 0.0098 → 0.0081 (−17%) | 0.0170 → 0.0028 (**−84%**) |
+| tube_screamer [smooth] | 0.0160 → 0.0136 (−15%) | 0.0247 → 0.0115 (**−53%**) |
+| crossover [hard] | 0.0694 → 0.0799 (+15%) | 0.0741 → 0.0818 (+10%) |
+
+**This is the first architectural swing that genuinely wins** — and exactly where
+theory predicts: on the formant-rich *smooth* circuits (the real pedal/amp
+circuits) the input-dependent complex STFT branch cuts the **high-band/formant
+error 31–84%** and overall ESR 15–26%, directly closing the documented
+formant-fidelity gap a pure time-domain TCN smooths. It regresses only the
+pure-discontinuity **crossover** (+15% — no formant structure there; the branch
+dilutes the time head's corner work), so it is a **smooth-circuit tool**, not
+universal. Figure: `outputs/figs/frontier/spectral_ab.png`.
+
+**Caveats / escalation (the binding open question = real-time):** the prototype is
+**offline** (`center=True` STFT, non-causal, ~12 ms look-ahead) and the spectral
+MLP is **heavy (422k params)**. BUT the per-frame cost amortizes to ~1.6k MAC/sample
+(one 513→256→1026 matmul + a 1024-pt FFT every 256-sample hop), so it is plausibly
+real-time — **must be measured**. Next: (1) causal **overlap-add streaming** version
+(latency = window; report it), measure **RTF**; (2) **slim** the MLP (smaller hidden
+/ per-bin-local / low-rank) — the win likely survives a much smaller net; (3)
+**multi-length STFT** (256/1024/4096) only if latency budget allows (the long window
+dominates latency → ~93 ms at 4096, too much for live — likely keep ≤1024). If RTF
+> 1 and latency is playable, **integrate into CIRCE3 as an optional spectral branch
+for smooth circuits** (gate it off for discontinuity circuits). This is the most
+promising lever found in the radical-swings arc.

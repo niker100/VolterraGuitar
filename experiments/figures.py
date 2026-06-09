@@ -150,6 +150,37 @@ def fig_circex_gate(circex: dict[str, Any]) -> None:
     _save(fig, "circex_gate")
 
 
+def fig_spectral_ab(sp: dict[str, Any]) -> None:
+    """Two-panel A/B for the spectral hybrid: overall ESR (left) + high-band >4k ESR
+    (right, the formant-fidelity metric it exists to move), time-only vs hybrid."""
+    circuits = list(sp)
+    x = np.arange(len(circuits))
+    w = 0.38
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 3.6))
+    for ax, key, title in (
+        (a1, "esr", "overall held-ESR"),
+        (a2, "band", "high-band (>4 kHz) ESR — the formant target"),
+    ):
+        base = np.array([sp[c]["time_only"][key] for c in circuits])
+        hyb = np.array([sp[c]["hybrid"][key] for c in circuits])
+        ax.bar(x - w / 2, base, w, label="time-only TCN", color=OKABE_ITO["gray"],
+               edgecolor="black", linewidth=0.4)
+        ax.bar(x + w / 2, hyb, w, label="+ spectral branch", color=OKABE_ITO["blue"],
+               edgecolor="black", linewidth=0.4)
+        for xi, b, h in zip(x, base, hyb, strict=True):
+            d = 100.0 * (h - b) / b if b else 0.0
+            ax.text(xi + w / 2, h, f"{d:+.0f}%", ha="center", va="bottom", fontsize=6.5)
+        ax.set_xticks(x)
+        ax.set_xticklabels([f"{c}\n[{sp[c].get('kind', '')}]" for c in circuits], fontsize=8)
+        ax.set_ylabel(title, fontsize=9)
+        ax.set_title(title, fontsize=9)
+    a1.legend(fontsize=8)
+    fig.suptitle("Spectral-domain hybrid: complex STFT branch nails the formant band "
+                 "(smooth circuits), neutral-to-worse on the dead-zone", fontsize=9.5)
+    fig.tight_layout()
+    _save(fig, "spectral_ab")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -178,6 +209,10 @@ def main() -> None:
                "circex_suite", kinds)
         fig_circex_gate(cx)
         made.extend(["circex_suite", "circex_gate"])
+    sp = _load("spectral_probe")
+    if sp:
+        fig_spectral_ab(sp)
+        made.append("spectral_ab")
     print(f"generated {len(made)} figures: {', '.join(made) or '(none — no JSONs yet)'}", flush=True)
 
 
