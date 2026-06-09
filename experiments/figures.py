@@ -301,9 +301,60 @@ def fig_spectral_leads(leads: dict[str, Any]) -> None:
     _save(fig, "spectral_leads")
 
 
+_CFG_COLORS = [OKABE_ITO[k] for k in ("gray", "blue", "vermillion", "green", "orange",
+                                      "purple", "sky", "yellow")]
+_CIRC_ORDER = ["bjt", "jfet", "tube_screamer", "fullwave_rectifier", "hysteretic_fuzz",
+               "crossover", "asym_clipper", "hard_clipper", "wavefolder"]
+
+
+def fig_sota_campaign(name: str, data: dict[str, Any]) -> None:
+    """Grouped-bar held-ESR leaderboard for a SOTA campaign: circuits on x, one bar
+    per UNIFORM config, log y, the 0.005 target drawn as a bold dashed line. Seed
+    min-max whiskers where >1 seed. The at-a-glance 'which single config clears the
+    bar on every circuit' view that drives the no-tailoring search."""
+    labels = list(data)
+    circuits = [c for c in _CIRC_ORDER if any(c in data[lab] for lab in labels)]
+    circuits += [c for lab in labels for c in data[lab] if c not in circuits]
+    circuits = list(dict.fromkeys(circuits))
+    x = np.arange(len(circuits))
+    n = max(len(labels), 1)
+    w = 0.82 / n
+    fig, ax = plt.subplots(figsize=(max(8.0, 1.5 * len(circuits)), 4.2))
+    for j, lab in enumerate(labels):
+        held = [data[lab].get(c, {}).get("held") or [np.nan] for c in circuits]
+        means = np.array([float(np.mean(h)) for h in held])
+        lo = np.array([float(np.min(h)) for h in held])
+        hi = np.array([float(np.max(h)) for h in held])
+        off = (j - (n - 1) / 2) * w
+        ax.bar(x + off, means, w, label=lab, color=_CFG_COLORS[j % len(_CFG_COLORS)],
+               edgecolor="black", linewidth=0.4,
+               yerr=[np.clip(means - lo, 0, None), np.clip(hi - means, 0, None)],
+               capsize=2, error_kw={"lw": 0.7})
+    ax.axhline(0.005, ls="--", color=OKABE_ITO["black"], lw=1.4)
+    ax.text(len(circuits) - 0.5, 0.0053, "target 0.005", ha="right", va="bottom",
+            fontsize=8, color=OKABE_ITO["black"])
+    ax.set_yscale("log")
+    ax.set_xticks(x)
+    ax.set_xticklabels(circuits, fontsize=8, rotation=25, ha="right")
+    ax.set_ylabel("held-out ESR (log) — lower better")
+    ax.set_title(f"SOTA campaign '{name}': held-ESR per circuit by uniform config\n"
+                 "(dashed = 0.005 target on every circuit; whiskers = seed min-max)",
+                 fontsize=9)
+    ax.legend(fontsize=8, ncol=min(n, 4), loc="upper left")
+    fig.tight_layout()
+    _save(fig, f"sota_{name}")
+
+
 def main() -> None:
     apply_style()
     made = []
+    sota_dir = Path("outputs/sota")
+    if sota_dir.exists():
+        for p in sorted(sota_dir.glob("*.json")):
+            data = json.loads(p.read_text())
+            if data:
+                fig_sota_campaign(p.stem, data)
+                made.append(f"sota_{p.stem}")
     if fig_wavefolder_frontier():
         made.append("wavefolder_frontier")
     mvg = _load("mixed_vs_gated_final")
