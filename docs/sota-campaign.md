@@ -305,3 +305,12 @@ adopt for the trained path, which remains the route to 0.005.
 - **Other closed-form paths (verdict):** ELM/Hammerstein are no-training but plateau
   ~0.04–0.3 (no trained features) — fast screening/init tools, not SOTA. The closed-form
   *readout* (VarPro) is the keeper: it accelerates training of the real model.
+- **Production validation (`varpro_circe3`) — VarPro WINS on smooth, neutral on memory:**
+  on the production model (nb2/L10 + n_state=4 + OS2 + dcblock_off): bjt varpro-60 0.0050
+  ≈ standard-150 0.0044 at **2.5× less wall-clock**; **jfet varpro-150 0.0010 vs standard
+  0.0048 — 5× MORE accurate** (revises the "VarPro = joint" call: on the strong arch the
+  always-optimal readout also reaches a better minimum). hysteretic_fuzz (memory)
+  neutral-to-slower (0.0146 vs 0.0134) — VarPro doesn't fix memory (that's the IIR
+  channels). So VarPro = faster + sharper on smooth/near-static circuits. Threaded into
+  the harness (`varpro` config key). `unified_varpro` (standard vs varpro, full suite)
+  running to see if it pulls more circuits under 0.005.

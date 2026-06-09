@@ -55,9 +55,12 @@ def load_circuit(circuit: str) -> tuple[Dataset, Dataset, str]:
     return Dataset.load(_DATA / f"{sweep_nm}.npz"), Dataset.load(_DATA / f"{test_nm}.npz"), kind
 
 
+_TRAIN_KEYS = ("label", "varpro")  # config keys that are NOT CIRCE3 ctor args
+
+
 def build(cfg: dict[str, Any], device: str) -> CIRCE3:
     """CIRCE3 from a config dict (single drive control, folded into the input)."""
-    kw = {k: v for k, v in cfg.items() if k != "label"}
+    kw = {k: v for k, v in cfg.items() if k not in _TRAIN_KEYS}
     if "rect_thr" in kw:
         kw["rect_thr"] = tuple(kw["rect_thr"])
     return CIRCE3(n_control=1, signal_idx=(0,), device=device, **kw)
@@ -94,7 +97,7 @@ def train_eval(
         tr,
         ts,
         TrainConfig(epochs=epochs, lr=3e-3, seq_len=4096, batch_size=batch_size,
-                    warmup=2048, seed=seed),
+                    warmup=2048, seed=seed, varpro=cfg.get("varpro", False)),
     )
     esr = held_esr(model, ts)
     return {
