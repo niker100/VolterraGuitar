@@ -32,7 +32,7 @@ from experiments.common import make_log
 from experiments.sota.harness import CIRCUITS as HC
 from vguitar import metrics as M
 from vguitar.losses import esr_loss, preemph_esr_loss
-from vguitar.models.circe3 import _segments
+from vguitar.models.circe3 import _onepole_scan, _segments
 from vguitar.models.tcn import _MixedLayer
 
 DEVICE = "cuda"
@@ -53,14 +53,22 @@ class VarProNet(nn.Module):
     out_bound: torch.Tensor
 
     def __init__(self, trainable_readout: bool, channels: int = CHANNELS,
-                 n_layers: int = N_LAYERS, feat_dim: int = FEAT_DIM, kernel: int = KERNEL) -> None:
+                 n_layers: int = N_LAYERS, feat_dim: int = FEAT_DIM, kernel: int = KERNEL,
+                 n_state: int = 0, sr: int = 44_100) -> None:
         super().__init__()
-        self.input = nn.Conv1d(1, channels, 1)
+        self.n_state = n_state
+        self.input = nn.Conv1d(1 + n_state, channels, 1)
         self.layers = nn.ModuleList(_MixedLayer(channels, kernel, 2**i) for i in range(n_layers))
         self.proj = nn.Conv1d(channels, feat_dim, 1)
         self.feat_dim = feat_dim
         self.rf = 1 + (kernel - 1) * sum(2**i for i in range(n_layers))
         self.trainable_readout = trainable_readout
+        if n_state > 0:  # learnable one-pole memory channels (parallel-scan), zero-init input
+            taus = torch.logspace(float(np.log10(5e-3)), float(np.log10(0.5)), n_state)
+            a0 = torch.exp(-1.0 / (taus * sr)).clamp(1e-4, 1 - 1e-6)
+            self.a_logit = nn.Parameter(torch.log(a0 / (1.0 - a0)))
+            with torch.no_grad():
+                self.input.weight[:, 1:, :].zero_()
         if trainable_readout:
             self.readout = nn.Linear(feat_dim, 1)
         else:
@@ -68,7 +76,11 @@ class VarProNet(nn.Module):
         self.register_buffer("out_bound", torch.tensor(1.0))
 
     def features(self, x: torch.Tensor) -> torch.Tensor:
-        h = self.input(x.unsqueeze(1) if x.ndim == 2 else x.view(1, 1, -1))
+        x2 = x if x.ndim == 2 else x.reshape(-1, x.shape[-1])  # -> (B, T)
+        xin = x2.unsqueeze(1)  # (B, 1, T)
+        if self.n_state > 0:
+            xin = torch.cat([xin, _onepole_scan(x2, torch.sigmoid(self.a_logit))], dim=1)
+        h = self.input(xin)
         skip = torch.zeros_like(h)
         for layer in self.layers:
             h, sk = layer(h)
