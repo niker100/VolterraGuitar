@@ -323,3 +323,14 @@ dominates latency → ~93 ms at 4096, too much for live — likely keep ≤1024)
 > 1 and latency is playable, **integrate into CIRCE3 as an optional spectral branch
 for smooth circuits** (gate it off for discontinuity circuits). This is the most
 promising lever found in the radical-swings arc.
+
+**SLIM RESULT — the win is real-time-affordable (`experiments/spectral_slim.py`).**
+Sweeping the spectral hidden width {16,32,64,256} on bjt+jfet: the band>4k win is
+**flat across all sizes**, and **hidden=16 is as good or better** than 256 (bjt
+band −32% at every width; jfet −90% at h16 vs −84% at h256 — the big MLP slightly
+overfits). hidden=16 adds only **~25k params** (513→16→1026), ~4M MAC/s amortized
+over the 256-sample hop — **trivially real-time**. The 422k MLP was pure overkill.
+→ **Greenlit:** build the causal overlap-add streaming spectral branch at
+hidden≈16-32 (train with `center=False` so streaming matches), confirm
+streaming-exactness + RTF + latency, then integrate into CIRCE3.
+Figure: `outputs/figs/frontier/spectral_slim.png`.

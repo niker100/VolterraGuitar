@@ -181,6 +181,26 @@ def fig_spectral_ab(sp: dict[str, Any]) -> None:
     _save(fig, "spectral_ab")
 
 
+def fig_spectral_slim(slim: dict[str, Any]) -> None:
+    """band>4k vs spectral hidden width — shows the formant win is flat down to a tiny
+    net (so it's real-time-affordable; the big MLP was overkill)."""
+    fig, ax = plt.subplots(figsize=(6.5, 3.6))
+    cols = {"bjt": OKABE_ITO["vermillion"], "jfet": OKABE_ITO["blue"]}
+    for circ, runs in slim.items():
+        hs = sorted(v["hidden"] for v in runs.values())
+        band = [next(v["band"] for v in runs.values() if v["hidden"] == h) for h in hs]
+        base = next(v["band"] for v in runs.values() if v["hidden"] == 0)
+        ax.plot(hs, band, "o-", color=cols.get(circ, OKABE_ITO["green"]), label=circ)
+        ax.axhline(base, ls=":", color=cols.get(circ, OKABE_ITO["green"]), lw=1, alpha=0.5)
+    ax.set_xlabel("spectral hidden width (0 = time-only baseline, dotted)")
+    ax.set_ylabel("high-band (>4 kHz) ESR")
+    ax.set_title("Spectral formant win is flat down to hidden=16 → real-time-affordable",
+                 fontsize=9)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _save(fig, "spectral_slim")
+
+
 def main() -> None:
     apply_style()
     made = []
@@ -213,6 +233,10 @@ def main() -> None:
     if sp:
         fig_spectral_ab(sp)
         made.append("spectral_ab")
+    sl = _load("spectral_slim")
+    if sl:
+        fig_spectral_slim(sl)
+        made.append("spectral_slim")
     print(f"generated {len(made)} figures: {', '.join(made) or '(none — no JSONs yet)'}", flush=True)
 
 
