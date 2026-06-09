@@ -255,9 +255,33 @@ for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
   from 0.005 (jfet 4608→9216 feats: 0.0367→0.0350, 17× off trained; tube_screamer 0.058,
   4×; hard_clipper 0.21). Structural feature-quality limit, not feature-count. Leak fixed
   (chunked HtH accumulation, bounded 3.5 GB). `elm_probe.py`.
-- **Alternating VarPro (`varpro_probe.py`, running):** the upgrade — trainable trunk +
-  wide feature layer + lstsq readout, alternating closed-form solves with backprop on the
-  hidden weights. A/B vs joint training. *Does the always-optimal readout + trained
-  features beat/speed up standard training?* (VarPro on the FULL net is the right framing
-  — my earlier "low-impact" note was about the thin readout only; with a wide feature
-  layer + alternating hidden-weight learning, per the user, it can matter a lot.)
+- **Alternating VarPro (`varpro_probe.py`):** trainable trunk + wide feature layer +
+  lstsq readout. First (alternating, freeze-W-10-epochs) version DIVERGED (bjt 0.03→0.42:
+  trunk overfits a stale W, feature collapse). Fixed → **differentiable per-batch solve**
+  (Golub-Pereyra, fp64 + scale-relative ridge).
+
+### VarPro / closed-form verdict (user-directed deep dive, 2026-06-09)
+
+Tested the full closed-form family. **Headline: closed-form is NOT an accuracy
+gamechanger here — the trained nonlinear features are the lever, and the readout is a
+trivial linear layer SGD already optimizes.** Evidence (held-ESR; trained-CIRCE3 refs in
+parens):
+
+| method | bjt | jfet | ts | crossover | hard_clipper | notes |
+|---|---|---|---|---|---|---|
+| ELM (random feats + lstsq) | 0.10 | 0.035 | 0.058 | 0.13 | 0.21 | plateaus with width; ~5 s |
+| Hammerstein (structured + lstsq) | 0.18 | 0.083 | 0.090 | 0.30 | 0.30 | *worse* than ELM (shallow) |
+| VarPro (trained feats + lstsq) | 0.030 | 0.011 | 0.016 | 0.061 | 0.127 | ≈ joint, 6× slower |
+| joint (trained feats + trained readout) | 0.030 | 0.010 | 0.017 | 0.063 | 0.126 | the baseline (weak prototype arch) |
+| *(trained CIRCE3 ref)* | *0.0046* | *0.002* | *0.0145* | *0.0225* | *0.0558* | strong arch |
+
+Reads: (1) **VarPro ≈ joint** — the closed-form readout gives no accuracy gain (the
+readout is trivial to train). (2) **VarPro ≫ ELM** (bjt 0.03 vs 0.10, ~4×) — *trained*
+features beat random ones; the user's "alternate instead of dropping backprop improves
+massively" holds **vs ELM**, not vs joint. (3) Pure closed-form (ELM/Hammerstein) plateaus
+~0.04–0.3, far from 0.005 — no trained features. (4) The differentiable per-batch fp64
+solve is ~6× slower/epoch, so VarPro is slower as implemented.
+**Remaining open angle (`varpro_conv.py`, running):** does VarPro converge in FEWER
+epochs (the only speed mechanism)? **The genuine computational win found is BIGGER BATCH**
+(validated ~1.4×, fills the 24 GB card) — that's the "computationally better" lever to
+adopt for the trained path, which remains the route to 0.005.
