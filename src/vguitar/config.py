@@ -65,6 +65,7 @@ class TrainConfig:
     test_fraction: float = 0.1
     device: str = "cpu"  # CPU is the realtime target; keep training honest
     seed: int = 0
+    amp: bool = False  # bf16 autocast on CUDA (training-only; fp32 weights + numpy twin)
 
 
 @dataclass(frozen=True)

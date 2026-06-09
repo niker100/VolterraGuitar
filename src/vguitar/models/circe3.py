@@ -307,7 +307,14 @@ class _CIRCE3Net(nn.Module):
         """Pre-clamp output ``(B, T)``. ``x`` is ALREADY signal-scaled."""
         xin = _rect_feats_torch(x, self.rect_thr) if self.rect_thr else x.unsqueeze(1)
         if self.n_state > 0:
-            xin = torch.cat([xin, _onepole_scan(x, torch.sigmoid(self.a_logit))], dim=1)
+            a = torch.sigmoid(self.a_logit)
+            if torch.is_autocast_enabled():
+                # the cumulative a^(2^k) in the scan is precision-sensitive: keep it fp32
+                with torch.autocast(x.device.type, enabled=False):
+                    state = _onepole_scan(x.float(), a.float()).to(xin.dtype)
+            else:
+                state = _onepole_scan(x, a)
+            xin = torch.cat([xin, state], dim=1)
         h = self.input(xin)  # (B, C, T)
         skip = h.new_zeros(h.shape)
         gamma = beta = None
@@ -509,6 +516,10 @@ class CIRCE3(Model):
         dev = torch.device(pick_device("auto"))
         self.device = dev
         self.net.to(dev)
+        # bf16 autocast (CUDA only): ~1.3-2x faster forward/backward at full memory
+        # headroom; weights stay fp32 and the numpy streaming twin is untouched, so
+        # streaming-exactness is preserved. The IIR scan is forced fp32 (see raw()).
+        use_amp = bool(cfg.amp) and dev.type == "cuda"
         # Oversampling: train the net at the internal rate on upsampled data, so it
         # learns to reproduce the (alias-free) target there; inference downsamples.
         # The receptive field / windows scale with the factor to keep memory-in-time.
@@ -546,15 +557,16 @@ class CIRCE3(Model):
                 sel = perm[i : i + cfg.batch_size]
                 xin = xb[sel] * gb[sel][:, None]  # fold signal gain into input
                 csys = sb[sel] if sb is not None else None
-                pred = self.net(xin, csys)[:, warmup:]
-                tgt = yb[sel][:, warmup:]
-                loss = esr_loss(pred, tgt)
-                if self.stft_weight:
-                    loss = loss + self.stft_weight * multi_stft_loss(pred, tgt)
-                if self.preemph_weight:
-                    loss = loss + self.preemph_weight * preemph_esr_loss(
-                        pred, tgt, self.preemph_alpha, order=self.preemph_order
-                    )
+                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                    pred = self.net(xin, csys)[:, warmup:]
+                    tgt = yb[sel][:, warmup:]
+                    loss = esr_loss(pred, tgt)
+                    if self.stft_weight:
+                        loss = loss + self.stft_weight * multi_stft_loss(pred, tgt)
+                    if self.preemph_weight:
+                        loss = loss + self.preemph_weight * preemph_esr_loss(
+                            pred, tgt, self.preemph_alpha, order=self.preemph_order
+                        )
                 opt.zero_grad()
                 loss.backward()
                 if self.grad_clip > 0:
