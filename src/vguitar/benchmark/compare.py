@@ -44,6 +44,13 @@ _TEST_SEED = 777
 #: dominated on both axes, so it does not belong in this curated comparison. It is
 #: still a registered model; run it explicitly via ``vguitar bench --model ssm``.
 _BASELINES = ("volterra", "wh", "tcn", "rnn")
+#: The GPU-efficient, informative subset (``--no-cpu-baselines``). ``tcn`` is the
+#: strong dilated-conv backbone — the only baseline that both trains efficiently on
+#: CUDA and is genuinely informative (it is what CIRCE3 must beat). ``volterra``/``wh``
+#: are numpy (CPU-only), and the LSTM ``rnn`` is launch-bound on the GPU (tiny
+#: sequential kernels idle the device while pegging a CPU core) and a known loser —
+#: so they waste the 4090 for numbers that never change the story.
+_GPU_BASELINES = ("tcn",)
 
 
 # --- helpers --------------------------------------------------------------
@@ -80,7 +87,7 @@ def _esr_at_drive(model: Any, circ: Any, dry: np.ndarray, g: float, sr: int,
 
 # --- per-circuit run ------------------------------------------------------
 def _compare_one(circuit_name: str, cfg: Config, *, epochs: int, regen: bool,
-                 console: Any) -> dict[str, Any]:
+                 console: Any, baselines: tuple[str, ...] = _BASELINES) -> dict[str, Any]:
     """Train CIRCE3 + baselines on one circuit; return rows + write its figures."""
     import matplotlib.pyplot as plt
 
@@ -148,7 +155,7 @@ def _compare_one(circuit_name: str, cfg: Config, *, epochs: int, regen: bool,
     # --- baselines: fixed-point specialists trained at g_nom ---
     tr_u, va_u, _ = _uncond(fp_ds).split(0.12, 0.0001)
     trained: dict[str, Any] = {"circe3": circe3}
-    for name in _BASELINES:
+    for name in baselines:
         try:
             console.print(f"  training [cyan]{name}[/] (fixed point) ...")
             m = _instantiate(name, dev)
@@ -269,8 +276,14 @@ def _fig_generalization(drives: np.ndarray, c3: np.ndarray, tcn: np.ndarray | No
 
 # --- entry ----------------------------------------------------------------
 def run_compare(circuit_names: list[str], *, cfg: Config | None = None,
-                epochs: int = 150, regen: bool = False) -> dict[str, Any]:
-    """Run the CIRCE3-vs-architectures benchmark across circuits; print + plot."""
+                epochs: int = 150, regen: bool = False,
+                baselines: tuple[str, ...] = _BASELINES) -> dict[str, Any]:
+    """Run the CIRCE3-vs-architectures benchmark across circuits; print + plot.
+
+    ``baselines`` selects which non-CIRCE3 architectures to race; pass
+    ``_GPU_BASELINES`` (via ``--no-cpu-baselines``) to skip the CPU-only / GPU-idle
+    losers and spend compute only on the GPU-efficient, informative comparison.
+    """
     import matplotlib.pyplot as plt
     from rich.console import Console
     from rich.table import Table
@@ -284,7 +297,8 @@ def run_compare(circuit_names: list[str], *, cfg: Config | None = None,
 
     all_rows: list[dict[str, Any]] = []
     for cname in circuit_names:
-        res = _compare_one(cname, cfg, epochs=epochs, regen=regen, console=console)
+        res = _compare_one(cname, cfg, epochs=epochs, regen=regen, console=console,
+                           baselines=baselines)
         for r in res["rows"]:
             r["circuit"] = cname
         all_rows.extend(res["rows"])
@@ -300,7 +314,7 @@ def run_compare(circuit_names: list[str], *, cfg: Config | None = None,
         console.print(table)
 
     # cross-circuit ESR matrix
-    models = ["circe3", *_BASELINES]
+    models = ["circe3", *baselines]
     matrix = np.full((len(circuit_names), len(models)), np.nan)
     for i, cname in enumerate(circuit_names):
         for j, mname in enumerate(models):

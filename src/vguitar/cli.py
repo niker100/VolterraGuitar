@@ -600,8 +600,12 @@ def cmd_benchmark(args: argparse.Namespace, cfg: Config) -> int:
     except ImportError as exc:
         return _fail(f"benchmark/compare unavailable: {exc}")
     circuits = [c.strip() for c in args.circuits.split(",") if c.strip()]
+    from vguitar.benchmark.compare import _BASELINES, _GPU_BASELINES
+
+    baselines = _GPU_BASELINES if args.no_cpu_baselines else _BASELINES
     try:
-        run_compare(circuits, cfg=cfg, epochs=args.epochs, regen=args.regen)
+        run_compare(circuits, cfg=cfg, epochs=args.epochs, regen=args.regen,
+                    baselines=baselines)
     except (KeyError, RuntimeError, FileNotFoundError) as exc:
         return _fail(str(exc))
     return 0
@@ -667,6 +671,10 @@ def _build_parser() -> argparse.ArgumentParser:
                     help="training epochs per neural method (150 = speed/quality sweet spot; "
                          "cosine-LR has converged by then and 300 can overfit hard circuits)")
     sp.add_argument("--regen", action="store_true", help="re-simulate the benchmark datasets")
+    sp.add_argument("--no-cpu-baselines", action="store_true",
+                    help="race only the GPU-efficient informative baseline (tcn); skip the "
+                         "CPU-only numpy fits (volterra/wh) and the launch-bound LSTM (rnn): "
+                         "they idle the GPU for numbers that don't change the verdict")
     sp.set_defaults(func=cmd_benchmark)
 
     return p
