@@ -389,6 +389,39 @@ def fig_lever_ab(name: str, data: dict[str, Any]) -> None:
     _save(fig, f"lever_{name}")
 
 
+def fig_speed_ab(data: dict[str, Any]) -> None:
+    """Training speed vs held-ESR per arm (batch x LR x precision), one panel per
+    circuit: x = wall-clock secs, y = held-ESR (log), 0.005 target line, control
+    (b12) circled. The 'fastest arm whose ESR matches the control' adoption view;
+    collapsed arms (ESR >= 0.5) sit at the top as open markers."""
+    circuits = list(data)
+    fig, axes = plt.subplots(1, len(circuits), figsize=(4.2 * len(circuits), 3.6),
+                             squeeze=False)
+    for ax, c in zip(axes[0], circuits, strict=True):
+        arms = {k: v for k, v in data[c].items() if isinstance(v, dict) and v.get("held")}
+        for j, (label, r) in enumerate(arms.items()):
+            held, secs = float(r["held"]), float(r["secs"])
+            col = _CFG_COLORS[j % len(_CFG_COLORS)]
+            dead = held >= 0.5  # diverged/collapsed arm
+            ax.scatter(secs, held, s=46, color=col, zorder=3,
+                       facecolors="none" if dead else col, linewidths=1.4)
+            if label == "b12":
+                ax.scatter(secs, held, s=130, facecolors="none", edgecolors="black",
+                           linewidths=1.0, zorder=2)
+            ax.annotate(label + (" (amp)" if r.get("amp") else ""), (secs, held),
+                        textcoords="offset points", xytext=(4, 4), fontsize=7)
+        ax.axhline(0.005, ls="--", color=OKABE_ITO["black"], lw=1.2)
+        ax.set_yscale("log")
+        ax.set_xlabel("training wall-clock (s)")
+        ax.set_ylabel("held-out ESR (log)")
+        ax.set_title(f"{c} [{data[c].get('kind', '')}]", fontsize=9)
+    fig.suptitle("Training-speed A/B: batch x LR x bf16 — open markers = collapsed "
+                 "(bf16 breaks the discontinuity circuit; b96/lr9 fp32 is the keeper)",
+                 fontsize=9)
+    fig.tight_layout()
+    _save(fig, "speed_ab")
+
+
 def fig_varpro_conv(data: dict[str, Any]) -> None:
     """held-ESR vs epoch, joint vs VarPro, per circuit — VarPro reaches the plateau in
     ~3x fewer epochs (the closed-form readout trains the trunk against an always-optimal
@@ -425,7 +458,10 @@ def main() -> None:
             data = json.loads(p.read_text())
             if not data:
                 continue
-            if _is_campaign(data):
+            if p.stem == "speed_ab":
+                fig_speed_ab(data)
+                made.append("speed_ab")
+            elif _is_campaign(data):
                 fig_sota_campaign(p.stem, data)
                 made.append(f"sota_{p.stem}")
             else:

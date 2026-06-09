@@ -590,6 +590,7 @@ class CIRCE3(Model):
 
         history: dict[str, list[float]] = {"train_loss": [], "val_esr": []}
         best_val, best_state = float("inf"), self._clone_state()
+        skipped = 0  # non-finite update steps skipped (see guard below)
         for _ in range(cfg.epochs):
             self.net.train()
             perm = torch.randperm(xb.shape[0], generator=gen)
@@ -618,11 +619,20 @@ class CIRCE3(Model):
                             )
                 opt.zero_grad()
                 loss.backward()
-                if self.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(self.net.parameters(), self.grad_clip)
-                opt.step()
-                ep += loss.item()
-                n_batch += 1
+                gnorm = torch.nn.utils.clip_grad_norm_(
+                    self.net.parameters(), self.grad_clip if self.grad_clip > 0 else torch.inf
+                )
+                # Non-finite guard: a single spiked batch (inf/NaN loss or grads) must
+                # SKIP the update, not poison the weights — once a NaN reaches opt.step
+                # every later epoch is NaN, val never improves, and fit returns the
+                # untrained init (observed as held-ESR == 1.0 collapses).
+                lval = loss.item()
+                if np.isfinite(lval) and bool(torch.isfinite(gnorm)):
+                    opt.step()
+                    ep += lval
+                    n_batch += 1
+                else:
+                    skipped += 1
             history["train_loss"].append(ep / max(n_batch, 1))
             if not cfg.varpro:  # val / best-epoch tracking needs the trained readout
                 ve = self._eval_esr(val, cfg) if val is not None else history["train_loss"][-1]
@@ -638,7 +648,8 @@ class CIRCE3(Model):
             self._load_state(best_state)
         to_inference_cpu(self)
         self.reset()
-        return FitReport(history=history, info={"best_val_esr": best_val})
+        return FitReport(history=history,
+                         info={"best_val_esr": best_val, "skipped_steps": skipped})
 
     @torch.no_grad()
     def _varpro_set_readout(self, xb, yb, gb, sb, warmup, ridge: float = 1e-2,
