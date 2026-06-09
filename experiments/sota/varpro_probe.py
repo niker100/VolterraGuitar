@@ -112,7 +112,7 @@ def solve_W(net: VarProNet, segs, device: str, ridge: float = RIDGE, chunk: int 
             del f, fb
         del x, y
         torch.cuda.empty_cache()
-    a += ridge * torch.eye(nf, device=device, dtype=torch.float64)
+    a += ridge * a.diag().mean() * torch.eye(nf, device=device, dtype=torch.float64)
     return torch.linalg.solve(a, bv).float()
 
 
@@ -150,11 +150,12 @@ def _solve_diff(f: torch.Tensor, y: torch.Tensor, ridge: float, warmup: int
     bsz, feat, _ = f.shape
     ones = torch.ones(bsz, 1, f.shape[2], device=f.device)
     fb = torch.cat([f, ones], 1)[:, :, warmup:]  # (B, F+1, Tw)
-    hcols = fb.permute(1, 0, 2).reshape(feat + 1, -1)  # (F+1, B*Tw)
-    yt = y[:, warmup:].reshape(-1)  # (B*Tw,)
-    a = hcols @ hcols.T + ridge * torch.eye(feat + 1, device=f.device)
+    hcols = fb.permute(1, 0, 2).reshape(feat + 1, -1).double()  # (F+1, B*Tw), fp64
+    yt = y[:, warmup:].reshape(-1).double()  # (B*Tw,)
+    a = hcols @ hcols.T
+    a += ridge * a.diag().mean() * torch.eye(feat + 1, device=f.device, dtype=torch.float64)
     w = torch.linalg.solve(a, hcols @ yt)  # (F+1,)
-    return (w @ hcols).reshape(bsz, -1)  # (B, Tw)
+    return (w @ hcols).reshape(bsz, -1).float()  # (B, Tw)
 
 
 def train(net: VarProNet, segs, device: str, varpro: bool, log) -> None:
