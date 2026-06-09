@@ -241,6 +241,23 @@ for hard_clipper/crossover; a depth knob for the near-misses; wavefolder last.
 - **2026-06-09 — Training-speed track (user idea).** GPU underutilized at batch=12
   (65% util, 18% mem, 45% power). Added `TrainConfig.amp` (bf16 autocast, fp32 weights
   + numpy twin untouched, IIR scan forced fp32) and `speed_ab.py` (batch × LR × AMP,
-  measuring wall-clock AND held-ESR; bigger batch = fewer steps so LR co-scaled). The
-  jfet arm also validates the zero-init fix. Winner becomes the harness default for all
-  future campaigns. (VarPro noted but low-impact: only the thin 1×1 readout is linear.)
+  measuring wall-clock AND held-ESR; bigger batch = fewer steps so LR co-scaled).
+
+### Speed + closed-form track (user ideas, 2026-06-09)
+
+- **zero-init fix CONFIRMED:** jfet `b12` unified = 0.0046 (recovered from the tainted
+  0.0055; depth-only was 0.0020 — IIR still costs a little but jfet clears 0.005).
+- **bigger batch wins:** jfet `b48_lr6` = 0.0041 in 108 s vs 0.0046/150 s at b12 (~1.4×
+  faster, ESR holds/improves); GPU util jumped when batch grew. Sweep extended to
+  192/384 (OOM-safe) to find the max that fills the 24 GB card → harness default.
+- **ELM (random features + lstsq readout) — VERDICT: fast tool, not SOTA.** ~0.05–0.23
+  ESR in ~5 s (no backprop), but improves only slowly with width and **plateaus** far
+  from 0.005 (jfet 4608→9216 feats: 0.0367→0.0350, 17× off trained; tube_screamer 0.058,
+  4×; hard_clipper 0.21). Structural feature-quality limit, not feature-count. Leak fixed
+  (chunked HtH accumulation, bounded 3.5 GB). `elm_probe.py`.
+- **Alternating VarPro (`varpro_probe.py`, running):** the upgrade — trainable trunk +
+  wide feature layer + lstsq readout, alternating closed-form solves with backprop on the
+  hidden weights. A/B vs joint training. *Does the always-optimal readout + trained
+  features beat/speed up standard training?* (VarPro on the FULL net is the right framing
+  — my earlier "low-impact" note was about the thin readout only; with a wide feature
+  layer + alternating hidden-weight learning, per the user, it can matter a lot.)
