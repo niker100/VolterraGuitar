@@ -314,3 +314,30 @@ adopt for the trained path, which remains the route to 0.005.
   channels). So VarPro = faster + sharper on smooth/near-static circuits. Threaded into
   the harness (`varpro` config key). `unified_varpro` (standard vs varpro, full suite)
   running to see if it pulls more circuits under 0.005.
+
+### Best uniform config so far + VarPro-uniform verdict (`unified_varpro`, 2026-06-09)
+
+**The standard unified config — dcblock_off + nb2/L10 (depth) + n_state=4 (IIR) + OS2 — is
+the best uniform config yet: 4/9 cleanly under 0.005.** Fig: `sota_unified_varpro`.
+
+| circuit | standard | varpro |
+|---|---|---|
+| asym_clipper | **0.0008** OK | 0.0043 OK |
+| tube_screamer | **0.0026** OK | 0.0013 OK (depth L10 cracked it; was 0.0145) |
+| bjt | **0.0044** OK | 0.0042 OK |
+| jfet | **0.0045** OK | 0.0010 OK |
+| fullwave | 0.0057 (near) | 0.0171 |
+| hysteretic | 0.0139 | 0.0172 |
+| crossover | 0.0154 | 0.0976 |
+| hard_clipper | 0.0578 | 0.0496 |
+| wavefolder | 0.245 | 0.84 (broke) |
+
+**VarPro is NOT uniform-safe:** it sharpens smooth circuits (jfet 0.0010, ts 0.0013) but
+BREAKS the discontinuity circuits — the closed-form L2 readout finds a worse minimum where
+the transfer curve is sharp. So uniform training = **standard**; VarPro is a tool for the
+smooth circuits + fast iteration, not the uniform method.
+
+**Remaining above 0.005 (standard):** fullwave 0.0057 (near), hysteretic 0.0139, crossover
+0.0154, hard_clipper 0.0578, wavefolder 0.245. Next levers: data-v2 (3x data, running on
+the unified config), multi-seed, capacity/depth for hard_clipper, grey-box / complementary
+metric for wavefolder.

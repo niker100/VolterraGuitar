@@ -43,8 +43,9 @@ def _train_eval(sweep: str, test: str, seed: int = 0) -> float:
     tr = Dataset.load(f"data/{sweep}.npz")
     ts = Dataset.load(f"data/{test}.npz")
     torch.manual_seed(seed)
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=24, n_blocks=2, n_layers=9,
-               oversample=2, dcblock_fc=0.0, device="cuda")
+    # the unified production config: depth L10 + IIR memory + dcblock_off + OS2
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=24, n_blocks=2, n_layers=10,
+               oversample=2, dcblock_fc=0.0, n_state=4, device="cuda")
     m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=3e-3, seq_len=4096, batch_size=12,
                               warmup=2048, seed=seed))
     return held_esr(m, ts)
