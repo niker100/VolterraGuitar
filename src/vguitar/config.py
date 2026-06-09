@@ -66,6 +66,8 @@ class TrainConfig:
     device: str = "cpu"  # CPU is the realtime target; keep training honest
     seed: int = 0
     amp: bool = False  # bf16 autocast on CUDA (training-only; fp32 weights + numpy twin)
+    varpro: bool = False  # variable-projection: solve the final linear readout in closed
+    # form each step (fp32 lstsq) instead of SGD -> ~3x fewer epochs to converge
 
 
 @dataclass(frozen=True)

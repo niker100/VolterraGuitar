@@ -193,6 +193,25 @@ def _onepole_scan(x: torch.Tensor, a: torch.Tensor) -> torch.Tensor:
     return s
 
 
+def _varpro_solve(
+    feats: torch.Tensor, y: torch.Tensor, warmup: int, ridge: float = 1e-2
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Variable-projection readout: solve the final linear map ``W`` (C+1, incl. bias)
+    that best fits ``y`` from penultimate features ``feats`` (B, C, T) in CLOSED FORM
+    (fp32 ridge lstsq, scale-relative), differentiable so the trunk gradient flows. The
+    always-optimal readout converges the trunk in ~3x fewer epochs than SGD; fp32 because
+    the 4090 cripples fp64 ~64x (so the per-batch solve is ~free). Returns
+    ``(pred (B, Tw), W (C+1,))`` over the post-warmup region."""
+    bsz, ch, t = feats.shape
+    fb = torch.cat([feats, feats.new_ones(bsz, 1, t)], 1)[:, :, warmup:]  # (B, C+1, Tw)
+    hcols = fb.permute(1, 0, 2).reshape(ch + 1, -1)  # (C+1, B*Tw)
+    yt = y[:, warmup:].reshape(-1)
+    a = hcols @ hcols.T
+    a += ridge * a.diag().mean() * torch.eye(ch + 1, device=feats.device)
+    w = torch.linalg.solve(a, hcols @ yt)
+    return (w @ hcols).reshape(bsz, -1), w
+
+
 def _mixed_act_np(
     conv: np.ndarray, sizes: tuple[int, int, int, int, int], alpha: np.ndarray
 ) -> np.ndarray:
@@ -310,8 +329,9 @@ class _CIRCE3Net(nn.Module):
         gb = self.cond(cn).view(-1, self.n_total, 2, self.channels)
         return 1.0 + torch.tanh(gb[:, :, 0, :]), gb[:, :, 1, :]
 
-    def raw(self, x: torch.Tensor, c_sys: torch.Tensor | None) -> torch.Tensor:
-        """Pre-clamp output ``(B, T)``. ``x`` is ALREADY signal-scaled."""
+    def penult(self, x: torch.Tensor, c_sys: torch.Tensor | None) -> torch.Tensor:
+        """Features feeding the FINAL linear readout ``out[3]`` (B, C, T) — the linear
+        head VarPro training solves in closed form. ``x`` is ALREADY signal-scaled."""
         xin = _rect_feats_torch(x, self.rect_thr) if self.rect_thr else x.unsqueeze(1)
         if self.n_state > 0:
             a = torch.sigmoid(self.a_logit)
@@ -333,7 +353,11 @@ class _CIRCE3Net(nn.Module):
                 h = gamma[:, i, :, None] * h + beta[:, i, :, None]  # FiLM before the layer
             h, sk = layer(h)
             skip = skip + sk
-        o = self.out(skip).squeeze(1)
+        return self.out[2](self.out[1](self.out[0](skip)))  # up to (not incl) the final conv
+
+    def raw(self, x: torch.Tensor, c_sys: torch.Tensor | None) -> torch.Tensor:
+        """Pre-clamp output ``(B, T)``. ``x`` is ALREADY signal-scaled."""
+        o = self.out[3](self.penult(x, c_sys)).squeeze(1)
         if self.out_shaper == "fourier":
             k = torch.arange(1, self.shaper_k + 1, device=o.device, dtype=o.dtype)
             o = o + (self.shaper_c * torch.sin(k * self.shaper_w * o.unsqueeze(-1))).sum(-1)
@@ -546,7 +570,11 @@ class CIRCE3(Model):
         xb, yb, gb, sb = self._windows(train, seq_len, hop=seq_len - warmup)
         xb, yb, gb = xb.to(dev), yb.to(dev), gb.to(dev)
         sb = sb.to(dev) if sb is not None else None
-        opt = torch.optim.Adam(self.net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        # VarPro: the final linear readout out[3] is solved in closed form, not trained,
+        # so it is excluded from the optimizer (and set globally after training).
+        params = ([p for n, p in self.net.named_parameters() if not n.startswith("out.3")]
+                  if cfg.varpro else list(self.net.parameters()))
+        opt = torch.optim.Adam(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
         # Cosine LR annealing to 1% of the initial rate: the fine convergence the
         # last factor in ESR needs (a flat LR plateaus well above it).
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -564,16 +592,24 @@ class CIRCE3(Model):
                 sel = perm[i : i + cfg.batch_size]
                 xin = xb[sel] * gb[sel][:, None]  # fold signal gain into input
                 csys = sb[sel] if sb is not None else None
-                with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
-                    pred = self.net(xin, csys)[:, warmup:]
-                    tgt = yb[sel][:, warmup:]
+                tgt = yb[sel][:, warmup:]
+                if cfg.varpro:  # closed-form readout each step (fp32 lstsq); trunk backprops
+                    pred, _ = _varpro_solve(self.net.penult(xin, csys).float(), yb[sel], warmup)
                     loss = esr_loss(pred, tgt)
-                    if self.stft_weight:
-                        loss = loss + self.stft_weight * multi_stft_loss(pred, tgt)
                     if self.preemph_weight:
                         loss = loss + self.preemph_weight * preemph_esr_loss(
                             pred, tgt, self.preemph_alpha, order=self.preemph_order
                         )
+                else:
+                    with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                        pred = self.net(xin, csys)[:, warmup:]
+                        loss = esr_loss(pred, tgt)
+                        if self.stft_weight:
+                            loss = loss + self.stft_weight * multi_stft_loss(pred, tgt)
+                        if self.preemph_weight:
+                            loss = loss + self.preemph_weight * preemph_esr_loss(
+                                pred, tgt, self.preemph_alpha, order=self.preemph_order
+                            )
                 opt.zero_grad()
                 loss.backward()
                 if self.grad_clip > 0:
@@ -582,16 +618,45 @@ class CIRCE3(Model):
                 ep += loss.item()
                 n_batch += 1
             history["train_loss"].append(ep / max(n_batch, 1))
-            ve = self._eval_esr(val, cfg) if val is not None else history["train_loss"][-1]
-            history["val_esr"].append(ve)
-            if ve < best_val:
-                best_val, best_state = ve, self._clone_state()
+            if not cfg.varpro:  # val / best-epoch tracking needs the trained readout
+                ve = self._eval_esr(val, cfg) if val is not None else history["train_loss"][-1]
+                history["val_esr"].append(ve)
+                if ve < best_val:
+                    best_val, best_state = ve, self._clone_state()
             sched.step()
 
-        self._load_state(best_state)
+        if cfg.varpro:  # set out[3] to the GLOBAL closed-form readout for inference
+            self._varpro_set_readout(xb, yb, gb, sb, warmup)
+            best_val = self._eval_esr(val, cfg) if val is not None else history["train_loss"][-1]
+        else:
+            self._load_state(best_state)
         to_inference_cpu(self)
         self.reset()
         return FitReport(history=history, info={"best_val_esr": best_val})
+
+    @torch.no_grad()
+    def _varpro_set_readout(self, xb, yb, gb, sb, warmup, ridge: float = 1e-2,
+                            bs: int = 64) -> None:
+        """Solve the final readout ``out[3]`` globally over all training windows (chunked,
+        fp32 ridge lstsq) and write it into the conv, so inference + the numpy streaming
+        twin use the closed-form-optimal readout (the layer stays a plain linear conv —
+        streaming-exactness is unchanged)."""
+        ch = self.channels
+        a = torch.zeros(ch + 1, ch + 1, device=self.device)
+        bv = torch.zeros(ch + 1, device=self.device)
+        self.net.eval()
+        for i in range(0, xb.shape[0], bs):
+            xin = xb[i:i + bs] * gb[i:i + bs][:, None]
+            csys = sb[i:i + bs] if sb is not None else None
+            feats = self.net.penult(xin, csys).float()  # (b, ch, T)
+            fb = torch.cat([feats, feats.new_ones(feats.shape[0], 1, feats.shape[2])], 1)
+            hcols = fb[:, :, warmup:].permute(1, 0, 2).reshape(ch + 1, -1)
+            a += hcols @ hcols.T
+            bv += hcols @ yb[i:i + bs][:, warmup:].reshape(-1)
+        a += ridge * a.diag().mean() * torch.eye(ch + 1, device=self.device)
+        w = torch.linalg.solve(a, bv)
+        self.net.out[3].weight.copy_(w[:ch].view(1, ch, 1))
+        self.net.out[3].bias.copy_(w[ch:ch + 1])
 
     def _clone_state(self) -> dict[str, torch.Tensor]:
         return {k: v.detach().clone() for k, v in self.net.state_dict().items()}

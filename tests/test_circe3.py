@@ -187,6 +187,26 @@ def test_iir_state_preserves_input_scaling() -> None:
     assert np.max(np.abs(y_g - y_scaled)) < 1e-5
 
 
+def test_varpro_training_streaming_exact() -> None:
+    """VarPro training (closed-form readout solved by lstsq each step) produces a model
+    that still streams bit-exact — out[3] stays a plain linear conv, set by the global
+    solve — and runs with the IIR memory channels (the memory-heavy-circuit path)."""
+    from vguitar.config import TrainConfig
+    from vguitar.data import Dataset
+
+    rng = np.random.default_rng(0)
+    n = 8000
+    x = (rng.standard_normal(n) * 0.3).astype(np.float32)
+    y = np.tanh(3.0 * x).astype(np.float32)
+    ds = Dataset(x, y, 44_100, controls=np.ones((n, 1), np.float32))
+    torch.manual_seed(0)
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=1, n_layers=4,
+               n_state=4, dcblock_fc=0.0)
+    m.fit(ds, ds, TrainConfig(epochs=3, lr=3e-3, seq_len=2048, batch_size=8, warmup=512,
+                              varpro=True))
+    assert _const_stream_err(m, np.array([1.0], np.float32)) <= 1e-4
+
+
 def test_block_act_mixed_streaming_and_roundtrip(tmp_path) -> None:
     """The heterogeneous mixed-activation block (block_act='mixed') must keep
     streaming bit-exact (incl. under oversampling + FiLM), preserve output length,
