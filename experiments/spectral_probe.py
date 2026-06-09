@@ -61,17 +61,21 @@ class _SpectralHybridNet(nn.Module):
 
     def __init__(self, channels: int, n_layers: int, kernel: int = 3,
                  n_fft: int = N_FFT, hop: int = HOP, use_spectral: bool = True,
-                 spec_hidden: int = 256) -> None:
+                 spec_hidden: int = 256, use_time: bool = True) -> None:
         super().__init__()
         self.use_spectral = use_spectral
+        self.use_time = use_time
         self.n_fft, self.hop = n_fft, hop
         self.spec_hidden = spec_hidden
         # --- time head: a mixed-activation TCN (the waveshaper) ---
-        self.input = nn.Conv1d(1, channels, 1)
-        self.layers = nn.ModuleList(_MixedLayer(channels, kernel, 2**i) for i in range(n_layers))
-        self.head = nn.Sequential(
-            nn.ReLU(), nn.Conv1d(channels, channels, 1), nn.ReLU(), nn.Conv1d(channels, 1, 1)
-        )
+        if use_time:
+            self.input = nn.Conv1d(1, channels, 1)
+            self.layers = nn.ModuleList(
+                _MixedLayer(channels, kernel, 2**i) for i in range(n_layers)
+            )
+            self.head = nn.Sequential(
+                nn.ReLU(), nn.Conv1d(channels, channels, 1), nn.ReLU(), nn.Conv1d(channels, 1, 1)
+            )
         # --- spectral branch: per-frame complex gain predicted from the magnitude ---
         if use_spectral:
             nbins = n_fft // 2 + 1
@@ -107,9 +111,11 @@ class _SpectralHybridNet(nn.Module):
         return y
 
     def raw(self, x: torch.Tensor, c_sys: torch.Tensor | None = None) -> torch.Tensor:
-        y = self._time(x)
+        y = self._time(x) if self.use_time else None
         if self.use_spectral:
-            y = y + self._spectral(x)
+            s = self._spectral(x)
+            y = s if y is None else y + s
+        assert y is not None, "need at least one of use_time / use_spectral"
         return y
 
     def forward(self, x: torch.Tensor, c_sys: torch.Tensor | None = None) -> torch.Tensor:
@@ -123,13 +129,14 @@ class SpectralHybrid(CIRCE3):
     name = "spectral_hybrid"
 
     def __init__(self, channels: int = 24, n_layers: int = 9, use_spectral: bool = True,
-                 spec_hidden: int = 256, device: str = "cpu", **kw: Any) -> None:
+                 spec_hidden: int = 256, use_time: bool = True, device: str = "cpu",
+                 **kw: Any) -> None:
         super().__init__(n_control=1, signal_idx=(0,), channels=channels,
                          n_blocks=1, n_layers=1, oversample=1, device=device, **kw)
         self.use_spectral = use_spectral
         self._nl = n_layers
         self.net = _SpectralHybridNet(channels, n_layers, use_spectral=use_spectral,
-                                      spec_hidden=spec_hidden).to(self.device)
+                                      spec_hidden=spec_hidden, use_time=use_time).to(self.device)
 
     def process(self, x: np.ndarray, c: np.ndarray | None = None) -> np.ndarray:
         self.net.eval()
