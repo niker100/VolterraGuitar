@@ -106,3 +106,61 @@ The honest bar: a *real* break is wavefolder well under ~0.15 with no smooth
 regression and RTF > 1. A null result that finally explains *why* the wall holds
 (with the OS4 evidence) is also a publishable conclusion — but only after the
 swings above are actually taken.
+
+## Step 2 — the multi-modal / mixture-of-experts swing (the big generalization bet)
+
+User direction (high priority): *"maybe it would make sense to have a really
+multimodal model, combining different activation functions, FFTs, longer memory,
+shorter memory, deep paths, shallow paths, convolutions etc. The goal is to
+generalize very well. If it isn't possible with a single architecture, just combine
+every possible approach — still it should not be tailored to one circuit."*
+
+The thesis: no *single* inductive bias is best for every circuit (the project log
+shows smooth-saturating circuits want tanh/smoothness, sharp circuits want
+corners, folds want periodicity, memory-circuits want long dilation, near-static
+ones want shallow). So **fuse heterogeneous experts in parallel and let a learned
+gate pick the mix per signal** — one architecture, trained circuit-agnostically,
+that *contains* every approach. Call it **CIRCE-X** (experimental; CIRCE3 stays the
+clean shipping model).
+
+**Parallel branches (heterogeneous inductive biases), each a small TCN-ish stack:**
+- **Activation-family experts:** tanh-gated (smooth), mixed (corner-capable),
+  snake/periodic (folds), abs/relu (kinks). (Reuses `_GatedLayer`/`_MixedLayer`.)
+- **Memory experts:** a **long-memory** path (large dilations / many layers, big
+  receptive field for jfet/TS/bjt) **and** a **short-memory** path (few layers,
+  near-static hard clippers) — depth/RF diversity.
+- **Deep vs shallow** paths (capacity diversity).
+- **Spectral/FFT branch:** an STFT → 1×1 mixing → iSTFT path (or a learned complex
+  mask) for formant/harmonic structure a time-domain conv under-weights. Must be
+  made causal + streaming (blocked STFT with overlap-save) or flagged offline-only
+  for the first A/B.
+- All branches share the input-scaling + FiLM control handling (so the
+  signal/system split is preserved across the ensemble).
+
+**Fusion:** a learned per-sample (or per-block) **gating head** (softmax over
+branches, optionally control- and signal-feature-conditioned) — a mixture of
+experts. The gate is learned from data, identical across circuits (no per-circuit
+hyperparameters): on a smooth circuit it should learn to down-weight the periodic/
+corner experts, on the wavefolder up-weight the periodic one, etc. That *is* the
+generalization mechanism.
+
+**Evaluation (circuit-agnostic, the whole point):** the headline is **mean AND
+worst-case held-ESR across the full suite** (bjt, jfet, tube_screamer, + the 6 edge
+cases) — not any single circuit — plus **CPU RTF**. Multi-seed, vs the current
+mixed/OS2/grad-clip default, with regression guards on circuits already < 0.02.
+
+**RTF discipline (binding):** the kitchen-sink will likely blow the real-time
+budget. So the plan is: (1) train the full ensemble, measure per-circuit gate
+weights + held-ESR; (2) **ablate branches** to find which actually carry the
+cross-circuit generalization (gate weight × ESR contribution); (3) **prune to the
+smallest real-time-affordable subset** that keeps the mean/worst-case win, and
+document the ablation. A non-real-time ensemble that generalizes is still a useful
+*teacher* (distill into a real-time student) and an informative upper bound — but
+the shippable result must be RTF > 1.
+
+**Order:** take this AFTER the capacity probe (Step 1 / `wavefolder_capacity_probe.py`)
+returns — that result tells us whether the wavefolder residual is even reachable by
+*any* model, which sets expectations for what the ensemble can do there. Build
+CIRCE-X as a new experimental model (`models/circex.py`), streaming-contract-tested,
+default-off; integrate into CIRCE3 only the branches an ablation proves carry
+generalization (the project's retire-what-doesn't-help discipline).
