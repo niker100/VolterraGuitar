@@ -223,6 +223,8 @@ class _CIRCE3Net(nn.Module):
         cond_hidden: int,
         rect_thr: tuple[float, ...] = (),
         block_act: str = "mixed",
+        out_shaper: str = "none",
+        shaper_k: int = 8,
     ) -> None:
         super().__init__()
         self.n_total = n_blocks * n_layers
@@ -230,6 +232,8 @@ class _CIRCE3Net(nn.Module):
         self.n_system = n_system
         self.rect_thr = rect_thr
         self.block_act = block_act
+        self.out_shaper = out_shaper
+        self.shaper_k = shaper_k
         self.input = nn.Conv1d(_n_rect_feats(rect_thr), channels, 1)
         dilations = [2**i for i in range(n_layers)]
         layer_cls = _MixedLayer if block_act == "mixed" else _GatedLayer
@@ -242,6 +246,14 @@ class _CIRCE3Net(nn.Module):
             nn.ReLU(),
             nn.Conv1d(channels, 1, 1),
         )
+        # Learned periodic (Fourier) waveshaper head: a residual correction
+        # y = o + sum_k c_k sin(k.w.o), an explicit multi-fold primitive a smooth
+        # TCN cannot synthesize. Zero-init c_k => identity at init (backward-compatible
+        # + input-scaling-preserving); pointwise => streaming-exact. w is a learned
+        # base angular frequency shared across harmonics.
+        if out_shaper == "fourier":
+            self.shaper_c = nn.Parameter(torch.zeros(shaper_k))
+            self.shaper_w = nn.Parameter(torch.ones(1))
         # Minimal FiLM conditioner on the system controls; zero-init readout so an
         # untrained net is the plain spine (gamma=1, beta=0).
         if n_system > 0:
@@ -273,7 +285,11 @@ class _CIRCE3Net(nn.Module):
                 h = gamma[:, i, :, None] * h + beta[:, i, :, None]  # FiLM before the layer
             h, sk = layer(h)
             skip = skip + sk
-        return self.out(skip).squeeze(1)
+        o = self.out(skip).squeeze(1)
+        if self.out_shaper == "fourier":
+            k = torch.arange(1, self.shaper_k + 1, device=o.device, dtype=o.dtype)
+            o = o + (self.shaper_c * torch.sin(k * self.shaper_w * o.unsqueeze(-1))).sum(-1)
+        return o
 
     def forward(self, x: torch.Tensor, c_sys: torch.Tensor | None) -> torch.Tensor:
         a = float(self.out_bound)
@@ -311,6 +327,8 @@ class CIRCE3(Model):
         os_taps: int = 127,
         rect_thr: tuple[float, ...] = (),
         block_act: str = "mixed",
+        out_shaper: str = "none",
+        shaper_k: int = 8,
         grad_clip: float = 1.0,
         device: str = "cpu",
     ) -> None:
@@ -318,6 +336,8 @@ class CIRCE3(Model):
             raise ValueError(f"saturator must be 'clamp', 'adaa1' or 'adaa2', got {saturator!r}")
         if block_act not in ("gated", "mixed"):
             raise ValueError(f"block_act must be 'gated' or 'mixed', got {block_act!r}")
+        if out_shaper not in ("none", "fourier"):
+            raise ValueError(f"out_shaper must be 'none' or 'fourier', got {out_shaper!r}")
         self.n_control = n_control
         # Signal-acting columns fold into the input gain; the rest are system-acting
         # and drive the FiLM. signal_idx is clamped to valid columns.
@@ -343,6 +363,8 @@ class CIRCE3(Model):
         self.dcblock_fc = float(dcblock_fc)
         self.rect_thr = tuple(float(t) for t in rect_thr)
         self.block_act = block_act
+        self.out_shaper = out_shaper
+        self.shaper_k = int(shaper_k)
         self.grad_clip = float(grad_clip)
         self.device = torch.device(device)
         self.net = _CIRCE3Net(
@@ -354,6 +376,8 @@ class CIRCE3(Model):
             cond_hidden,
             self.rect_thr,
             block_act,
+            out_shaper,
+            self.shaper_k,
         ).to(self.device)
         self._stream: dict[str, Any] | None = None
 
@@ -376,6 +400,8 @@ class CIRCE3(Model):
             "os_taps": self.os_taps,
             "rect_thr": list(self.rect_thr),
             "block_act": self.block_act,
+            "out_shaper": self.out_shaper,
+            "shaper_k": self.shaper_k,
             "grad_clip": self.grad_clip,
         }
 
@@ -619,6 +645,9 @@ class CIRCE3(Model):
             "o3b": sd["out.3.bias"],
             "n_system": self.n_system,
             "out_bound": float(sd["out_bound"]),
+            "shaper": self.out_shaper,
+            "shaper_c": sd.get("shaper_c"),
+            "shaper_w": sd.get("shaper_w"),
             "buf": [np.zeros((c, (self.kernel - 1) * d), dtype=np.float32) for d in dil],
             "dc_on": self.dcblock_fc > 0.0,
             "dc_ba": self._dc_ba(),
@@ -683,8 +712,13 @@ class CIRCE3(Model):
         o = np.maximum(skip, 0.0)
         o = np.maximum(s["o1w"] @ o + s["o1b"][:, None], 0.0)
         o = s["o3w"] @ o + s["o3b"][:, None]
+        o0 = o[0]
+        if s["shaper"] == "fourier":
+            kk = np.arange(1, s["shaper_c"].shape[0] + 1, dtype=np.float32)
+            w = float(s["shaper_w"][0])
+            o0 = o0 + (s["shaper_c"][:, None] * np.sin(kk[:, None] * w * o0[None, :])).sum(0)
         a = s["out_bound"]
-        out = self._saturate(o[0], a, s["adaa"])  # saturate at the oversampled rate
+        out = self._saturate(o0.astype(np.float32), a, s["adaa"])  # saturate at the OS rate
         if s["os"] is not None:
             out = s["os"].down(out)  # back to the base rate (alias-free)
         if s["dc_on"]:

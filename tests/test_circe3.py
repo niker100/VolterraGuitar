@@ -23,9 +23,9 @@ def _const_stream_err(model: CIRCE3, c: np.ndarray, n: int = 4096, block: int = 
     x = rng.standard_normal(n).astype(np.float32) * 0.3
     y_off = model.process(x, c)
     model.reset()
-    y_st = np.concatenate(
-        [model.process_block(x[i : i + block], c) for i in range(0, n, block)]
-    )[:n]
+    y_st = np.concatenate([model.process_block(x[i : i + block], c) for i in range(0, n, block)])[
+        :n
+    ]
     return float(np.max(np.abs(y_off - y_st)))
 
 
@@ -95,8 +95,9 @@ def test_oversample_streaming_exact_and_latency() -> None:
     """2x internal oversampling must keep streaming bit-exact (process ==
     block-streamed) and report the polyphase group delay as latency_samples."""
     torch.manual_seed(0)
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
-               oversample=2, os_taps=127)
+    m = CIRCE3(
+        n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4, oversample=2, os_taps=127
+    )
     assert m.latency_samples == (127 - 1) // 2
     c = np.array([0.6], np.float32)
     err = _const_stream_err(m, c)
@@ -123,8 +124,9 @@ def test_rect_input_features_streaming_and_roundtrip(tmp_path) -> None:
     """Rectified input features (the discontinuity-basis fix) must keep streaming
     bit-exact, preserve output length, and round-trip through save/load."""
     torch.manual_seed(0)
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
-               rect_thr=(0.0, 0.5, 1.0))
+    m = CIRCE3(
+        n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4, rect_thr=(0.0, 0.5, 1.0)
+    )
     c = np.array([0.6], np.float32)
     assert _const_stream_err(m, c) <= 1e-4
     x = np.random.default_rng(0).standard_normal(2048).astype(np.float32) * 0.3
@@ -140,8 +142,9 @@ def test_rect_input_preserves_input_scaling() -> None:
     """Rectified features are positive-homogeneous on the scaled input, so the
     signal-control = input-gain identity still holds exactly."""
     torch.manual_seed(0)
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4,
-               rect_thr=(0.0, 0.5))
+    m = CIRCE3(
+        n_control=1, signal_idx=(0,), channels=8, n_blocks=2, n_layers=4, rect_thr=(0.0, 0.5)
+    )
     x = np.random.default_rng(2).standard_normal(2048).astype(np.float32) * 0.3
     y_g = m.process(x, np.array([0.7], np.float32))
     y_scaled = m.process(0.7 * x, np.array([1.0], np.float32))
@@ -154,8 +157,15 @@ def test_block_act_mixed_streaming_and_roundtrip(tmp_path) -> None:
     and round-trip through save/load."""
     torch.manual_seed(0)
     # signal + system control so the FiLM path is exercised alongside the mixed block
-    m = CIRCE3(n_control=2, signal_idx=(0,), channels=15, n_blocks=2, n_layers=4,
-               oversample=2, block_act="mixed")
+    m = CIRCE3(
+        n_control=2,
+        signal_idx=(0,),
+        channels=15,
+        n_blocks=2,
+        n_layers=4,
+        oversample=2,
+        block_act="mixed",
+    )
     c = np.array([0.6, 0.3], np.float32)
     assert _const_stream_err(m, c) <= 1e-4
     x = np.random.default_rng(0).standard_normal(2048).astype(np.float32) * 0.3
@@ -171,8 +181,7 @@ def test_block_act_mixed_preserves_input_scaling() -> None:
     """The mixed-activation groups act per-channel after the conv, so the
     signal-control = input-gain identity still holds exactly."""
     torch.manual_seed(0)
-    m = CIRCE3(n_control=1, signal_idx=(0,), channels=15, n_blocks=2, n_layers=4,
-               block_act="mixed")
+    m = CIRCE3(n_control=1, signal_idx=(0,), channels=15, n_blocks=2, n_layers=4, block_act="mixed")
     x = np.random.default_rng(2).standard_normal(2048).astype(np.float32) * 0.3
     y_g = m.process(x, np.array([0.7], np.float32))
     y_scaled = m.process(0.7 * x, np.array([1.0], np.float32))
@@ -182,6 +191,63 @@ def test_block_act_mixed_preserves_input_scaling() -> None:
 def test_block_act_invalid() -> None:
     with pytest.raises(ValueError, match="block_act"):
         CIRCE3(n_control=1, channels=8, n_blocks=1, n_layers=2, block_act="bogus")
+
+
+def test_out_shaper_fourier_streaming_and_roundtrip(tmp_path) -> None:
+    """The learned Fourier waveshaper head (out_shaper='fourier') must keep streaming
+    bit-exact (incl. under oversampling), preserve length, and round-trip save/load.
+    Random (non-zero) shaper weights are set so the head is actually exercised."""
+    torch.manual_seed(0)
+    m = CIRCE3(
+        n_control=1,
+        signal_idx=(0,),
+        channels=12,
+        n_blocks=2,
+        n_layers=4,
+        oversample=2,
+        out_shaper="fourier",
+        shaper_k=6,
+    )
+    # zero-init c_k => identity; perturb so the periodic head is non-trivial
+    with torch.no_grad():
+        m.net.shaper_c.copy_(torch.linspace(0.1, -0.1, 6))
+        m.net.shaper_w.copy_(torch.tensor([1.3]))
+    c = np.array([0.6], np.float32)
+    assert _const_stream_err(m, c) <= 1e-4
+    x = np.random.default_rng(0).standard_normal(2048).astype(np.float32) * 0.3
+    assert len(m.process(x, c)) == len(x)
+    p = tmp_path / "shaper.model"
+    m.save(p)
+    r = CIRCE3.load(p)
+    assert r.out_shaper == "fourier" and r.shaper_k == 6
+    assert np.max(np.abs(m.process(x, c) - r.process(x, c))) < 1e-6
+
+
+def test_out_shaper_preserves_input_scaling() -> None:
+    """The Fourier head is a pointwise function of the net output, so the
+    signal-control = input-gain identity still holds exactly."""
+    torch.manual_seed(0)
+    m = CIRCE3(
+        n_control=1,
+        signal_idx=(0,),
+        channels=12,
+        n_blocks=2,
+        n_layers=4,
+        out_shaper="fourier",
+        shaper_k=6,
+    )
+    with torch.no_grad():
+        m.net.shaper_c.copy_(torch.linspace(0.1, -0.1, 6))
+        m.net.shaper_w.copy_(torch.tensor([1.3]))
+    x = np.random.default_rng(2).standard_normal(2048).astype(np.float32) * 0.3
+    y_g = m.process(x, np.array([0.7], np.float32))
+    y_scaled = m.process(0.7 * x, np.array([1.0], np.float32))
+    assert np.max(np.abs(y_g - y_scaled)) < 1e-5
+
+
+def test_out_shaper_invalid() -> None:
+    with pytest.raises(ValueError, match="out_shaper"):
+        CIRCE3(n_control=1, channels=8, n_blocks=1, n_layers=2, out_shaper="bogus")
 
 
 def test_fit_smoke_runs() -> None:

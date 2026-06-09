@@ -8,7 +8,24 @@ swings instead. Every idea here is **uniform** (one architecture for all circuit
 no per-circuit tailoring) and **real-time on CPU** — the binding constraints — but
 otherwise as radical as needed.
 
-## Step 0 — the diagnostic (running: `wavefolder_os_ab.py`)
+## Step 0 RESULT — the wall is NOT aliasing (representation-limited → Branch B)
+
+`wavefolder_os_ab.py` (mixed/grad-clip/150ep, 2 seeds on the hard arms):
+
+| config | held-ESR | vs OS2 | RTF |
+|---|---|---|---|
+| OS2_ch24 (shipping) | 0.1896 | — | 2.46× |
+| OS3_ch24 | 0.1862 | −2% (noise) | 2.02× |
+| OS4_ch24 | 0.2156 | **+14% worse** | 1.59× |
+| OS4_ch16 | 0.2242 | **+18% worse** | 2.39× |
+
+More internal bandwidth does **not** help — OS4 is *strictly worse* (a tighter
+Nyquist/4 FIR cutoff raises the resampler floor and 4×-longer windows hurt
+convergence at fixed epochs, but the headline is unambiguous: bandwidth is not the
+lever). **The wall is representation / inductive bias, not self-aliasing.** Branch A
+(ADAA alias-free activations) is therefore deprioritized; **taking Branch B**.
+
+## Step 0 — the diagnostic (DONE: `wavefolder_os_ab.py`)
 
 Train production CIRCE3 (mixed/grad-clip/150ep) at `oversample ∈ {2,3,4}` and read
 held-ESR **and** CPU RTF. This is the branch point:
