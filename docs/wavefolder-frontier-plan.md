@@ -208,6 +208,36 @@ CIRCE-X as a new experimental model (`models/circex.py`), streaming-contract-tes
 default-off; integrate into CIRCE3 only the branches an ablation proves carry
 generalization (the project's retire-what-doesn't-help discipline).
 
+### Step 2 RESULT — CIRCE-X MoE: REJECTED (the gate averages, it doesn't specialize)
+
+`experiments/circex_probe.py` (3 experts: gated-L9 / mixed-L7 / gated-L4 + a
+per-sample softmax gate, vs single-branch mixed TCN, OS1, same harness):
+
+| circuit | baseline | CIRCE-X | Δ | gate (long/mixed/shallow) |
+|---|---|---|---|---|
+| bjt [smooth] | 0.0291 | 0.0306 | +5% | 0.05 / **0.71** / 0.25 |
+| jfet [smooth] | 0.0037 | 0.0096 | **+160%** | 0.33 / 0.31 / 0.36 |
+| tube_screamer [smooth] | 0.0073 | 0.0167 | **+129%** | 0.38 / 0.26 / 0.36 |
+| crossover [hard] | 0.0583 | 0.0658 | +13% | 0.29 / 0.28 / 0.43 |
+| wavefolder [hard] | 0.2288 | 0.1698 | −26% | 0.33 / 0.31 / 0.36 |
+| **mean** | 0.0655 | 0.0585 | (wavefolder-dominated) | |
+
+**Verdict: rejected.** The MoE regresses 4/5 circuits — the smooth showcase
+(jfet/TS) catastrophically (+130-160%) — and wins only the wavefolder (a
+documented target floor anyway), at 1.6× params. The "mean improved" is purely the
+large-absolute wavefolder dominating the average. The **gate-weight figure**
+(`outputs/figs/frontier/circex_gate.png`) is the diagnostic: except on bjt (gate
+concentrates on `mixed`=0.71, only +5%), the gate collapses to a **~uniform split**
+— it *averages* the experts rather than specializing, which is strictly worse than
+the single best branch. That's the classic soft-MoE failure mode (no sparsity/
+load-balancing incentive). **Conclusion: a jointly-trained soft-gated MoE over
+heterogeneous branches does NOT generalize better than one well-chosen branch (the
+mixed TCN); fusing every approach dilutes rather than combines.** A sparsity-forced
+or top-1-routed gate is a conceivable refinement, but the prior is now weak and the
+smooth regressions are large — parked in favour of the more principled spectral
+swing (Step 3), which targets a *specific* documented gap with the *right* tool
+rather than hoping a gate learns to specialize.
+
 ## Step 3 — spectral-domain (STFT) hybrid: complex filtering + a time-domain head
 
 User direction (high priority, AFTER CIRCE-X): *"maybe we need to be more aggressive
