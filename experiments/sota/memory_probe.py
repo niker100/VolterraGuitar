@@ -19,7 +19,7 @@ Run (background): uv run python -m experiments.sota.memory_probe
 
 from __future__ import annotations
 
-from experiments.sota.harness import UNIFIED, run_campaign
+from experiments.sota.harness import SCREEN, UNIFIED, run_campaign
 
 CONFIGS = [
     {"label": "base", **UNIFIED},
@@ -31,4 +31,4 @@ CONFIGS = [
 CIRC = ["hysteretic_fuzz", "crossover", "bjt"]
 
 if __name__ == "__main__":
-    run_campaign("memory_probe", CONFIGS, CIRC, seeds=(0,), epochs=150)
+    run_campaign("memory_probe", CONFIGS, CIRC, seeds=(0,), epochs=150, **SCREEN)

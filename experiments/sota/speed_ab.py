@@ -33,13 +33,18 @@ from vguitar.config import TrainConfig
 from vguitar.data import Dataset
 from vguitar.models.circe3 import CIRCE3
 
-# (label, batch, lr, amp). lr12+ diverged at b192 (round 1) — big batches stay at the
-# proven 9e-3. b96_amp vs b96_lr9 isolates the pure bf16 effect. OOM arms are skipped.
+# (label, batch, lr, amp, lr_warmup). Round-1: lr12+ diverged at b192. Round-2/3:
+# bf16 fails DETERMINISTICALLY on hard_clipper+bjt (exact-value repro), and fp32
+# b96/lr9 stochastically falls into a predict-mean basin on bjt (~2/3 of runs) —
+# the early epochs overshoot at full scaled LR. Round 4 tests the standard fix:
+# 5-epoch linear LR warmup, at b96 (the candidate) and b12 (does it cost accuracy?).
 ARMS = [
-    ("b12", 12, 3e-3, False),         # control (current default)
-    ("b96_lr9", 96, 9e-3, False),     # 8x batch, fp32
-    ("b96_amp", 96, 9e-3, True),      # 8x batch, bf16  (vs b96_lr9 = pure AMP effect)
-    ("b192_amp9", 192, 9e-3, True),   # 16x batch, bf16, safe LR
+    ("b12", 12, 3e-3, False, 0),        # control (current default)
+    ("b96_lr9", 96, 9e-3, False, 0),    # 8x batch, fp32 — fast but bjt-unstable
+    ("b96_amp", 96, 9e-3, True, 0),     # 8x batch, bf16 — deterministically unsafe
+    ("b192_amp9", 192, 9e-3, True, 0),  # 16x batch, bf16, safe LR
+    ("b96_w5", 96, 9e-3, False, 5),     # the warmup candidate for SCREEN
+    ("b12_w5", 12, 3e-3, False, 5),     # warmup at the control point (accuracy cost?)
     # b384: too big for the card (user-confirmed) — WDDM swaps instead of OOM-ing,
     # so the try/except never fires and the box chokes. Do not re-add.
 ]
@@ -59,7 +64,7 @@ def main() -> None:
         tr = Dataset.load(f"data/{sweep}.npz")
         ts = Dataset.load(f"data/{test}.npz")
         row: dict = results.setdefault(key, {"kind": kind})
-        for label, bs, lr, amp in ARMS:
+        for label, bs, lr, amp, warm in ARMS:
             if row.get(label, {}).get("held") is not None:  # resume
                 continue
             t = time.time()
@@ -67,10 +72,10 @@ def main() -> None:
                 torch.manual_seed(0)
                 m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **MODEL)
                 m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=lr, seq_len=4096, batch_size=bs,
-                                          warmup=2048, seed=0, amp=amp))
+                                          warmup=2048, seed=0, amp=amp, lr_warmup=warm))
                 esr = held_esr(m, ts)
                 row[label] = {"held": esr, "secs": time.time() - t, "batch": bs,
-                              "lr": lr, "amp": amp}
+                              "lr": lr, "amp": amp, "lr_warmup": warm}
                 log(f"{key:14s} {label:10s} held={esr:.4f} ({time.time()-t:.0f}s)")
                 del m
             except Exception as exc:  # OOM at big batch -> skip, free, continue
@@ -81,7 +86,7 @@ def main() -> None:
             out.write_text(json.dumps(results, indent=2))
     log("=== speed / accuracy summary (secs | held-ESR) ===")
     for key in CIRC:
-        for label, _, _, _ in ARMS:
+        for label, *_ in ARMS:
             r = results.get(key, {}).get(label)
             if r is None or r.get("held") is None:
                 continue

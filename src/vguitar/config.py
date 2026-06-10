@@ -68,6 +68,9 @@ class TrainConfig:
     amp: bool = False  # bf16 autocast on CUDA (training-only; fp32 weights + numpy twin)
     varpro: bool = False  # variable-projection: solve the final linear readout in closed
     # form each step (fp32 lstsq) instead of SGD -> ~3x fewer epochs to converge
+    lr_warmup: int = 0  # epochs of linear LR ramp before cosine annealing: big-batch
+    # scaled LR can overshoot into a degenerate predict-mean basin in the first epochs
+    # (observed: bjt at b96/lr9e-3 collapses ~2/3 of runs); the ramp removes the overshoot
 
 
 @dataclass(frozen=True)

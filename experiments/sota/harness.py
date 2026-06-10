@@ -52,6 +52,14 @@ TARGET = 0.005  # the held-ESR bar that must hold on every circuit
 UNIFIED: dict[str, Any] = {"channels": 24, "n_blocks": 2, "n_layers": 10, "oversample": 2,
                            "dcblock_fc": 0.0, "n_state": 4}
 
+#: screening-speed training (speed_ab verdict): fp32 batch 96 / lr 9e-3 is ~1.4-2.2x
+#: faster wall-clock with held-ESR at-or-near the b12 control (jfet even improves);
+#: bf16 AMP is deterministically UNSAFE (collapses hard_clipper/bjt at some batches —
+#: exact-value reproducible, not stochastic). Use for relative A/B probes (the
+#: comparison is within-config); final/multi-seed leaderboard runs stay at the
+#: accuracy-proven defaults (batch 12 / lr 3e-3).
+SCREEN: dict[str, Any] = {"batch_size": 96, "lr": 9e-3}
+
 _DATA = Path("data")
 
 

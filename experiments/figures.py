@@ -422,6 +422,28 @@ def fig_speed_ab(data: dict[str, Any]) -> None:
     _save(fig, "speed_ab")
 
 
+def fig_hc_diag(data: dict[str, Any]) -> None:
+    """The stochastic-collapse diagnosis: per-epoch val-ESR for repeat runs of the
+    SAME hard_clipper cell (b12, seed 0 twice + seed 7) plus one b96 run. Identical
+    seeds fork into different trajectories (GPU nondeterminism), and a poisoned run
+    pins at ESR ~1 forever — the motivation for the non-finite step guard in fit()."""
+    fig, ax = plt.subplots(figsize=(6.4, 3.8))
+    for j, (tag, r) in enumerate(data.items()):
+        ve = np.asarray(r["val_esr"], dtype=float)
+        col = _CFG_COLORS[j % len(_CFG_COLORS)]
+        ax.plot(np.arange(len(ve)), ve, lw=1.5, color=col,
+                label=f"{tag} (held {r['held']:.3f})")
+    ax.set_yscale("log")
+    ax.axhline(0.005, ls="--", color=OKABE_ITO["black"], lw=1.2)
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("val ESR (log)")
+    ax.set_title("hard_clipper repeat runs: same seed, forked trajectories — a poisoned\n"
+                 "run pins at ESR~1 (why fit() now skips non-finite steps)", fontsize=9)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    _save(fig, "hc_diag")
+
+
 def fig_varpro_conv(data: dict[str, Any]) -> None:
     """held-ESR vs epoch, joint vs VarPro, per circuit — VarPro reaches the plateau in
     ~3x fewer epochs (the closed-form readout trains the trunk against an always-optimal
@@ -461,6 +483,9 @@ def main() -> None:
             if p.stem == "speed_ab":
                 fig_speed_ab(data)
                 made.append("speed_ab")
+            elif p.stem == "hc_diag":
+                fig_hc_diag(data)
+                made.append("hc_diag")
             elif _is_campaign(data):
                 fig_sota_campaign(p.stem, data)
                 made.append(f"sota_{p.stem}")

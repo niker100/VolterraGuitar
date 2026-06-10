@@ -581,17 +581,24 @@ class CIRCE3(Model):
         params = ([p for n, p in self.net.named_parameters() if not n.startswith("out.3")]
                   if cfg.varpro else list(self.net.parameters()))
         opt = torch.optim.Adam(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
-        # Cosine LR annealing to 1% of the initial rate: the fine convergence the
-        # last factor in ESR needs (a flat LR plateaus well above it).
-        sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            opt, T_max=max(cfg.epochs, 1), eta_min=cfg.lr * 0.01
-        )
+
+        # Cosine LR annealing to 1% of the initial rate (the fine convergence the last
+        # factor in ESR needs; a flat LR plateaus well above it), with an optional
+        # linear warmup over the first lr_warmup epochs — big-batch training at scaled
+        # LR can overshoot into a degenerate predict-mean basin in the first epochs.
+        def _lr(e: int) -> float:
+            warm = min(1.0, (e + 1) / cfg.lr_warmup) if cfg.lr_warmup > 0 else 1.0
+            cos = 0.01 + 0.99 * 0.5 * (1.0 + float(np.cos(np.pi * e / max(cfg.epochs, 1))))
+            return cfg.lr * warm * cos
+
         gen = torch.Generator().manual_seed(cfg.seed)
 
         history: dict[str, list[float]] = {"train_loss": [], "val_esr": []}
         best_val, best_state = float("inf"), self._clone_state()
         skipped = 0  # non-finite update steps skipped (see guard below)
-        for _ in range(cfg.epochs):
+        for epoch in range(cfg.epochs):
+            for g in opt.param_groups:
+                g["lr"] = _lr(epoch)
             self.net.train()
             perm = torch.randperm(xb.shape[0], generator=gen)
             ep, n_batch = 0.0, 0
@@ -639,7 +646,6 @@ class CIRCE3(Model):
                 history["val_esr"].append(ve)
                 if ve < best_val:
                     best_val, best_state = ve, self._clone_state()
-            sched.step()
 
         if cfg.varpro:  # set out[3] to the GLOBAL closed-form readout for inference
             self._varpro_set_readout(xb, yb, gb, sb, warmup)

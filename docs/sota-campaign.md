@@ -394,3 +394,26 @@ smooth circuits + fast iteration, not the uniform method.
 0.0154, hard_clipper 0.0578, wavefolder 0.245. Next levers: data-v2 (3x data, running on
 the unified config), multi-seed, capacity/depth for hard_clipper, grey-box / complementary
 metric for wavefolder.
+
+### Stochastic NaN-collapse found + fixed (2026-06-10)
+
+The speed A/B (batch x LR x bf16, jfet/hard_clipper/bjt) collapsed **5 of 12 cells to
+held-ESR ~1.0, scattered across ALL arm types** — including the b12 fp32 control on
+hard_clipper and b96 fp32 on the rock-solid bjt — while `unified_varpro` had 0/18 on
+byte-identical training code. Repeat diagnostic (`hc_diag.py`, fig `hc_diag`): the
+identical hard_clipper b12/seed-0 cell scored 0.0524 / 0.0497 on two reruns (collapsed
+run scored 1.0000), and the two healthy same-seed runs took *different trajectories*
+(one still at ESR 1.0 at epoch 5, one at 0.33). **Training is not bit-reproducible
+across runs (GPU-nondeterministic reductions), and a spiked batch -> inf/NaN grads ->
+`opt.step` poisons the weights permanently**; with NaN val forever, fit's best-val
+restore returns the *untrained init* — that is what held-ESR exactly 1.0 means.
+
+**Fix (trainer hardening, uniform):** `fit()` now computes the grad norm every step and
+**skips the optimizer step when loss or grad-norm is non-finite**
+(`FitReport.info.skipped_steps` counts them). One bad batch costs one step, not the run.
+
+**Measurement hygiene note:** cell wall-clocks vary up to 2x between processes (the same
+hard_clipper b12 cell: 184 s in one run, 98 s in another) — desktop/GPU contention. Speed
+ratios are only meaningful *within* one process; absolute secs across runs are not
+comparable. (The user predicted contention; RTF numbers in `unified_varpro` show the same
+artifact — varpro cells logged rtf ~2.1 vs 0.08 for identical architectures.)
