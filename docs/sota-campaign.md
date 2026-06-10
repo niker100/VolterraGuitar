@@ -450,3 +450,23 @@ resort the safe b12 point, so no campaign cell can report a collapse artifact. F
 leaderboard runs stay at b12/lr3/warm5. bf16's honest verdict for the user's 16-bit
 idea: training-unsafe for this loss/arch; the RT inference path is already fp32 numpy.
 Figs: `speed_ab`, `hc_diag`.
+
+### Quick-learner verdict (`fast_stack`, 2026-06-10) — vp60_b12 is the iteration config
+
+Combined-stack benchmark on the smooth circuits (where VarPro is safe), vs the
+standard-150ep/b12 leaderboard reference. Fig: `fast_stack`.
+
+| arm | jfet | bjt | tube_screamer | wall-clock |
+|---|---|---|---|---|
+| ref std150_b12 | 0.0045 | 0.0044 | 0.0026 | 1x |
+| **vp60_b12** | **0.0021** | 0.0049 | **0.0020** | **~2.6-3.0x less** |
+| vp60_b96_w5 | 0.0066 | 0.0094 | 0.0082 | ~6-7x less |
+| vp150_b96_w5 | 0.0022 | 0.0062 | 0.0033 | ~3x less |
+
+**VarPro-60ep at the safe b12 point = equal-or-SHARPER ESR at ~3x less wall-clock**
+(jfet 2.1x sharper than the reference). **VarPro x big-batch anti-compounds** at every
+epoch count — the trunk apparently needs small-batch gradient noise when the readout
+is solved optimally each step (the b96 stack is uniformly worse than vp60_b12 despite
+2x more wall-clock at 150 ep). So the two speed tools serve different jobs:
+**vp60_b12** for smooth-circuit iteration (accuracy-critical), **SCREEN b96/w5 +
+retry** for standard-training A/B probes (speed-critical, relative comparisons).

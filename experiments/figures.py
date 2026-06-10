@@ -422,6 +422,38 @@ def fig_speed_ab(data: dict[str, Any]) -> None:
     _save(fig, "speed_ab")
 
 
+def fig_fast_stack(data: dict[str, Any]) -> None:
+    """The quick-learner verdict: wall-clock vs held-ESR per arm on the smooth
+    circuits, with the standard-150ep/b12 leaderboard reference as the anchor point.
+    vp60_b12 (VarPro, 60 epochs, safe batch) reaches equal-or-sharper ESR at ~3x
+    less wall-clock; stacking big-batch onto VarPro anti-compounds."""
+    ref = {"jfet": (0.0045, 326.0), "bjt": (0.0044, 358.0),
+           "tube_screamer": (0.0026, 309.0)}  # unified_varpro 'standard', seed 0
+    circuits = [c for c in data if c in ref]
+    fig, axes = plt.subplots(1, len(circuits), figsize=(4.2 * len(circuits), 3.6),
+                             squeeze=False)
+    for ax, c in zip(axes[0], circuits, strict=True):
+        r_esr, r_secs = ref[c]
+        ax.scatter(r_secs, r_esr, s=70, color=OKABE_ITO["black"], marker="s", zorder=3)
+        ax.annotate("std150_b12 (ref)", (r_secs, r_esr), textcoords="offset points",
+                    xytext=(-8, 6), fontsize=7, ha="right")
+        arms = {k: v for k, v in data[c].items() if isinstance(v, dict) and v.get("held")}
+        for j, (label, r) in enumerate(arms.items()):
+            col = _CFG_COLORS[j % len(_CFG_COLORS)]
+            ax.scatter(r["secs"], r["held"], s=46, color=col, zorder=3)
+            ax.annotate(label, (r["secs"], r["held"]), textcoords="offset points",
+                        xytext=(4, 4), fontsize=7)
+        ax.axhline(0.005, ls="--", color=OKABE_ITO["black"], lw=1.2)
+        ax.set_yscale("log")
+        ax.set_xlabel("training wall-clock (s)")
+        ax.set_ylabel("held-out ESR (log)")
+        ax.set_title(f"{c} [smooth]", fontsize=9)
+    fig.suptitle("Quick-learner stack: vp60_b12 = equal-or-sharper ESR at ~3x less "
+                 "wall-clock; VarPro x big-batch anti-compounds", fontsize=9)
+    fig.tight_layout()
+    _save(fig, "fast_stack")
+
+
 def fig_hc_diag(data: dict[str, Any]) -> None:
     """The stochastic-collapse diagnosis: per-epoch val-ESR for repeat runs of the
     SAME hard_clipper cell (b12, seed 0 twice + seed 7) plus one b96 run. Identical
@@ -486,6 +518,9 @@ def main() -> None:
             elif p.stem == "hc_diag":
                 fig_hc_diag(data)
                 made.append("hc_diag")
+            elif p.stem == "fast_stack":
+                fig_fast_stack(data)
+                made.append("fast_stack")
             elif _is_campaign(data):
                 fig_sota_campaign(p.stem, data)
                 made.append(f"sota_{p.stem}")
