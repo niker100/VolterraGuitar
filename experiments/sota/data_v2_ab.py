@@ -15,13 +15,9 @@ import json
 import time
 from pathlib import Path
 
-import torch
-
-from experiments.common import held_esr, make_log
-from experiments.sota.harness import SCREEN, UNIFIED
-from vguitar.config import TrainConfig
+from experiments.common import make_log
+from experiments.sota.harness import SCREEN, UNIFIED, fit_score
 from vguitar.data import Dataset
-from vguitar.models.circe3 import CIRCE3
 
 EPOCHS = 150
 # circuit -> (original sweep, v2 sweep, unchanged test)
@@ -43,13 +39,10 @@ CIRCUITS = {
 def _train_eval(sweep: str, test: str, seed: int = 0) -> float:
     tr = Dataset.load(f"data/{sweep}.npz")
     ts = Dataset.load(f"data/{test}.npz")
-    torch.manual_seed(seed)
-    # the unified production config: depth L10 + IIR memory + dcblock_off + OS2,
-    # trained at screening speed (orig-vs-v2 is a within-config relative A/B)
-    m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **UNIFIED)
-    m.fit(tr, ts, TrainConfig(epochs=EPOCHS, lr=SCREEN["lr"], seq_len=4096,
-                              batch_size=SCREEN["batch_size"], warmup=2048, seed=seed))
-    return held_esr(m, ts)
+    # unified production config at screening speed (orig-vs-v2 is a within-config
+    # relative A/B); fit_score retries/falls back if a run lands in the collapse basin
+    _, r = fit_score(tr, ts, dict(UNIFIED), seed=seed, epochs=EPOCHS, **SCREEN)
+    return r["held"]
 
 
 def main() -> None:

@@ -415,9 +415,9 @@ def fig_speed_ab(data: dict[str, Any]) -> None:
         ax.set_xlabel("training wall-clock (s)")
         ax.set_ylabel("held-out ESR (log)")
         ax.set_title(f"{c} [{data[c].get('kind', '')}]", fontsize=9)
-    fig.suptitle("Training-speed A/B: batch x LR x bf16 — open markers = collapsed "
-                 "(bf16 breaks the discontinuity circuit; b96/lr9 fp32 is the keeper)",
-                 fontsize=9)
+    fig.suptitle("Training-speed A/B: batch x LR x bf16 x warmup — open markers = collapsed "
+                 "(bf16 deterministically unsafe; SCREEN = b96/lr9/warm5 fp32 + retry, "
+                 "finals b12)", fontsize=9)
     fig.tight_layout()
     _save(fig, "speed_ab")
 

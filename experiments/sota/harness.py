@@ -71,7 +71,11 @@ def load_circuit(circuit: str) -> tuple[Dataset, Dataset, str]:
 # config keys that are NOT CIRCE3 ctor args: campaign label + per-config training
 # overrides (a config dict can pin its own window/batch/lr/precision when the lever
 # under test needs it — e.g. a longer seq_len arm halves batch to hold GPU memory).
-_TRAIN_KEYS = ("label", "varpro", "seq_len", "batch_size", "lr", "amp")
+_TRAIN_KEYS = ("label", "varpro", "seq_len", "batch_size", "lr", "amp", "lr_warmup")
+
+#: held-ESR above this = the degenerate predict-mean basin (an output that ignores
+#: the input scores ~1.0; the worst GENUINE result in the suite is wavefolder 0.245).
+COLLAPSE = 0.5
 
 
 def build(cfg: dict[str, Any], device: str) -> CIRCE3:
@@ -95,6 +99,58 @@ def _rtf(model: CIRCE3, block: int = 512) -> float:
         return float("nan")
 
 
+def fit_score(
+    tr: Dataset,
+    ts: Dataset,
+    cfg: dict[str, Any],
+    *,
+    seed: int,
+    epochs: int,
+    device: str = "cuda",
+    batch_size: int = 12,
+    lr: float = 3e-3,
+    amp: bool = False,
+    retries: int = 1,
+    fallback: bool = True,
+) -> tuple[CIRCE3, dict[str, Any]]:
+    """Train one config on one (train, test) pair with collapse handling.
+
+    Training can stochastically land in a degenerate predict-mean basin (held-ESR
+    ~1.0; GPU nondeterminism decides — same seed, different outcome). A collapsed
+    run (held > COLLAPSE) is retried with a shifted seed, and as a last resort
+    falls back to the accuracy-proven safe point (batch 12 / lr 3e-3 / fp32) so a
+    campaign cell is never reported as a collapse artifact. Every fit gets a
+    5-epoch LR warmup by default (measured free at b12; removes the big-batch
+    early-overshoot collapse on all but the knife-edge circuits)."""
+    t = time.time()
+    plan = [(cfg.get("batch_size", batch_size), cfg.get("lr", lr), cfg.get("amp", amp),
+             seed + 1000 * k) for k in range(retries + 1)]
+    if fallback and (plan[0][0] != 12 or plan[0][1] != 3e-3 or plan[0][2]):
+        plan.append((12, 3e-3, False, seed))
+    attempts: list[float] = []
+    for bs, lr_k, amp_k, seed_k in plan:
+        torch.manual_seed(seed_k)
+        model = build(cfg, device)
+        model.fit(
+            tr,
+            ts,
+            TrainConfig(epochs=epochs, lr=lr_k, seq_len=cfg.get("seq_len", 4096),
+                        batch_size=bs, warmup=2048, seed=seed_k, amp=amp_k,
+                        varpro=cfg.get("varpro", False),
+                        lr_warmup=cfg.get("lr_warmup", 5)),
+        )
+        esr = held_esr(model, ts)
+        attempts.append(esr)
+        if esr < COLLAPSE:
+            break
+    return model, {
+        "held": attempts[-1],
+        "params": int(model.num_params()),
+        "secs": time.time() - t,
+        "attempts": attempts,
+    }
+
+
 def train_eval(
     circuit: str,
     cfg: dict[str, Any],
@@ -108,26 +164,9 @@ def train_eval(
 ) -> dict[str, Any]:
     """Train one uniform config on one circuit; return held-ESR + RTF + params."""
     tr, ts, kind = load_circuit(circuit)
-    t = time.time()
-    torch.manual_seed(seed)
-    model = build(cfg, device)
-    model.fit(
-        tr,
-        ts,
-        TrainConfig(epochs=epochs, lr=cfg.get("lr", lr),
-                    seq_len=cfg.get("seq_len", 4096),
-                    batch_size=cfg.get("batch_size", batch_size),
-                    warmup=2048, seed=seed, amp=cfg.get("amp", amp),
-                    varpro=cfg.get("varpro", False)),
-    )
-    esr = held_esr(model, ts)
-    return {
-        "held": esr,
-        "rtf": _rtf(model),
-        "params": int(model.num_params()),
-        "secs": time.time() - t,
-        "kind": kind,
-    }
+    model, r = fit_score(tr, ts, cfg, seed=seed, epochs=epochs, device=device,
+                         batch_size=batch_size, lr=lr, amp=amp)
+    return r | {"rtf": _rtf(model), "kind": kind}
 
 
 def run_campaign(
@@ -171,8 +210,10 @@ def run_campaign(
                     cell["rtf"] = r["rtf"]
                     cell["params"] = r["params"]
                     flag = "<<<" if r["held"] < TARGET else ""
+                    note = (f" [retried: {[f'{a:.3f}' for a in r['attempts'][:-1]]}]"
+                            if len(r["attempts"]) > 1 else "")
                     log(f"DONE  {label:16s} {circuit:18s} seed{seed} held={r['held']:.4f} "
-                        f"rtf={r['rtf']:.2f} params={r['params']} ({r['secs']:.0f}s) {flag}")
+                        f"rtf={r['rtf']:.2f} params={r['params']} ({r['secs']:.0f}s) {flag}{note}")
                 except Exception as exc:
                     log(f"FAIL  {label:16s} {circuit:18s} seed{seed}: {exc}")
                     log(traceback.format_exc())

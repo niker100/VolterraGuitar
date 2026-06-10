@@ -2,11 +2,12 @@
 
 Each lever is individually validated: VarPro reaches the plateau in ~3x fewer epochs
 (closed-form readout = always-optimal head from step 1) and sharpens smooth circuits
-(jfet 0.0010 vs 0.0045); b96 cuts wall-clock ~1.4-2.2x; the 5-epoch LR warmup removes
-the big-batch early-overshoot collapse. This measures the COMBINED stack — varpro-60ep
-at b96/lr9/w5 — against the standard-150ep/b12 reference on the circuits where VarPro
-is uniform-safe (smooth only; it breaks discontinuity circuits). Target: reference ESR
-at ~4-7x less wall-clock = the iteration config for all future smooth-circuit work.
+(jfet 0.0010 vs 0.0045); b96 cuts wall-clock ~1.4-2.7x; the 5-epoch LR warmup removes
+the big-batch early-overshoot collapse (except on hard_clipper, which is excluded —
+VarPro breaks discontinuity circuits anyway). This measures the COMBINED stack against
+the unified_varpro standard-150ep/b12 reference (REF below — not retrained; GPU time
+goes to new information only). Target: reference ESR at ~4-7x less wall-clock = the
+iteration config for all future smooth-circuit work.
 
 Run (background): uv run python -m experiments.sota.fast_stack
 """
@@ -17,23 +18,23 @@ import json
 import time
 from pathlib import Path
 
-import torch
-
-from experiments.common import held_esr, make_log
+from experiments.common import make_log
 from experiments.sota.harness import CIRCUITS as HC
-from experiments.sota.harness import UNIFIED
-from vguitar.config import TrainConfig
+from experiments.sota.harness import UNIFIED, fit_score
 from vguitar.data import Dataset
-from vguitar.models.circe3 import CIRCE3
 
-# (label, epochs, batch, lr, varpro, lr_warmup)
+#: the standard-150ep/b12 leaderboard numbers (outputs/sota/unified_varpro.json,
+#: config "standard", seed 0) — (held-ESR, secs); secs carry cross-process
+#: contention noise, so speed ratios are indicative, not exact.
+REF = {"jfet": (0.0045, 326.0), "bjt": (0.0044, 358.0), "tube_screamer": (0.0026, 309.0)}
+
+# (label, epochs, training overrides folded into the config dict)
 ARMS = [
-    ("ref_std150_b12", 150, 12, 3e-3, False, 0),   # the leaderboard reference
-    ("vp60_b96_w5", 60, 96, 9e-3, True, 5),        # the full quick-learner stack
-    ("vp60_b12", 60, 12, 3e-3, True, 0),           # validated varpro speedup (control)
-    ("vp150_b96_w5", 150, 96, 9e-3, True, 5),      # stack at full epochs (accuracy ceiling)
+    ("vp60_b96_w5", 60, {"varpro": True, "batch_size": 96, "lr": 9e-3}),   # the stack
+    ("vp60_b12", 60, {"varpro": True}),                                    # varpro alone
+    ("vp150_b96_w5", 150, {"varpro": True, "batch_size": 96, "lr": 9e-3}),  # ceiling
 ]
-CIRC = ["jfet", "bjt", "tube_screamer"]
+CIRC = list(REF)
 
 
 def main() -> None:
@@ -47,33 +48,21 @@ def main() -> None:
         tr = Dataset.load(f"data/{sweep}.npz")
         ts = Dataset.load(f"data/{test}.npz")
         row: dict = results.setdefault(key, {"kind": kind})
-        for label, ep, bs, lr, vp, warm in ARMS:
+        for label, ep, over in ARMS:
             if row.get(label, {}).get("held") is not None:  # resume
                 continue
             t = time.time()
             try:
-                torch.manual_seed(0)
-                m = CIRCE3(n_control=1, signal_idx=(0,), device="cuda", **UNIFIED)
-                m.fit(tr, ts, TrainConfig(epochs=ep, lr=lr, seq_len=4096, batch_size=bs,
-                                          warmup=2048, seed=0, varpro=vp, lr_warmup=warm))
-                esr = held_esr(m, ts)
-                row[label] = {"held": esr, "secs": time.time() - t, "epochs": ep,
-                              "batch": bs, "varpro": vp, "lr_warmup": warm}
-                log(f"{key:14s} {label:16s} held={esr:.4f} ({time.time()-t:.0f}s)")
-                del m
+                _, r = fit_score(tr, ts, UNIFIED | over, seed=0, epochs=ep)
+                row[label] = r | {"epochs": ep}
+                ref_esr, ref_s = REF[key]
+                log(f"{key:14s} {label:14s} held={r['held']:.4f} ({r['secs']:.0f}s) "
+                    f"[ref {ref_esr:.4f}/{ref_s:.0f}s -> {ref_s / r['secs']:.1f}x]")
             except Exception as exc:
-                torch.cuda.empty_cache()
                 row[label] = {"held": None, "secs": time.time() - t,
                               "error": str(exc)[:120]}
-                log(f"{key:14s} {label:16s} FAILED: {str(exc)[:100]}")
+                log(f"{key:14s} {label:14s} FAILED: {str(exc)[:100]}")
             out.write_text(json.dumps(results, indent=2))
-    log("=== fast-stack summary (secs | held-ESR) ===")
-    for key in CIRC:
-        for label, *_ in ARMS:
-            r = results.get(key, {}).get(label)
-            if r is None or r.get("held") is None:
-                continue
-            log(f"  {key:14s} {label:16s} {r['secs']:5.0f}s  ESR {r['held']:.4f}")
     log("done")
 
 

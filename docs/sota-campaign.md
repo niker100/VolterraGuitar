@@ -43,10 +43,14 @@ ts 0.0026 ✅, bjt 0.0044 ✅, jfet 0.0045 ✅ — then fullwave 0.0057, hystere
 0.0139, crossover 0.0154, hard_clipper 0.0578, wavefolder 0.245.
 
 **Prioritized tackle points:**
-1. **Adopt the fast training default** (`speed_ab`, running): interim — b96/lr9
-   fp32 *beats* control (jfet 0.0038 vs 0.0050) 1.4× faster; b96+bf16 matches
-   control at 2.1× speed; b192 diverges at lr12 and underconverges at lr9
-   (0.0079); b384 exceeds the card (WDDM swaps instead of OOM-ing — never again).
+1. **DONE — speed adoption (`speed_ab`, 4 rounds + `hc_diag`):** bf16 AMP is
+   deterministically unsafe (collapses hard_clipper/bjt); fp32 big-batch
+   overshoots into a degenerate basin without warmup. Adopted: **5-epoch LR
+   warmup everywhere** (free at b12), **SCREEN = b96/lr9/warm5 fp32** for A/B
+   probes with **retry-then-fallback** (`harness.fit_score`: held>0.5 → reseeded
+   retry → safe-b12 fallback), finals at b12/lr3/warm5. b384 exceeds the card
+   (WDDM swaps instead of OOM-ing — never again). Next: `fast_stack` (VarPro ×
+   b96 × warmup on smooth circuits, running).
 2. **Data volume** (`data_v2_ab`, resumable): 3× data moved jfet 0.0053 → 0.0034
    (−35%) — likely the cheapest lever for fullwave/crossover/hysteretic/
    hard_clipper. Re-run on the adopted fast config.
@@ -417,3 +421,32 @@ hard_clipper b12 cell: 184 s in one run, 98 s in another) — desktop/GPU conten
 ratios are only meaningful *within* one process; absolute secs across runs are not
 comparable. (The user predicted contention; RTF numbers in `unified_varpro` show the same
 artifact — varpro cells logged rtf ~2.1 vs 0.08 for identical architectures.)
+
+### Speed adoption (speed_ab rounds 3-4, 2026-06-10) — warmup + SCREEN + retry/fallback
+
+The guard alone did NOT fix the collapses: the guarded rerun reproduced the bf16
+failures at the EXACT same ESR (hard_clipper b192_amp9 1.3108 twice, bjt b96_amp 0.9932
+twice — deterministic, no NaN involved), and bjt b96_lr9 fp32 collapsed again (0.9998,
+~2/3 of samples). Revised mechanism: **early epochs at full scaled LR overshoot into a
+degenerate predict-mean basin** (held-ESR ~1.0 = best-val never left silence). bf16
+lands there deterministically on some circuit x batch combos (8-bit mantissa rounds
+away the early gradient signal); fp32 lands there stochastically (GPU nondeterminism
+decides). Round 4 = the standard medicine, **linear LR warmup** (`TrainConfig.lr_warmup`,
+ramp x the exact cosine schedule as before):
+
+| arm | jfet | hard_clipper | bjt | verdict |
+|---|---|---|---|---|
+| b12 (control) | 0.0050 | 0.0524 | 0.0044 | reference |
+| b12_w5 | 0.0047 | 0.0512 | 0.0044 | warmup is FREE at b12 → default everywhere |
+| b96_lr9 | 0.0038 | 0.0661 | collapse 2/3 | fast, unstable |
+| b96_w5 | 0.0046 | collapse | 0.0054 | warmup fixes bjt, NOT hard_clipper |
+| b96_amp / b192_amp9 | ok | collapse | mixed | **bf16 training disqualified** |
+
+**Adopted:** (1) `lr_warmup=5` in every harness fit (free insurance, also covers the
+b12 stochastic collapse observed once on hard_clipper); (2) **SCREEN = batch 96 / lr
+9e-3 / fp32** (~1.4-2.7x wall-clock) for relative A/B probes; (3) `harness.fit_score`
+with **collapse retry-then-fallback**: held>0.5 → retrain with shifted seed → last
+resort the safe b12 point, so no campaign cell can report a collapse artifact. Finals/
+leaderboard runs stay at b12/lr3/warm5. bf16's honest verdict for the user's 16-bit
+idea: training-unsafe for this loss/arch; the RT inference path is already fp32 numpy.
+Figs: `speed_ab`, `hc_diag`.
