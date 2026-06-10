@@ -14,7 +14,7 @@ frequencies already present), so each block is::
     x -> [global spectral filter] -> [+ bias] -> [MIXED pointwise nonlinearity]
       -> [1x1 channel mix] -> residual add
 
-The MIXED nonlinearity (reused from :mod:`vguitar.models.tcn`: tanh / gelu / relu
+The MIXED nonlinearity (reused from :mod:`vguitar.models.archive.tcn`: tanh / gelu / relu
 / abs / snake, one group per channel) is what synthesizes the distortion harmonics
 in TIME; the spectral diagonal does the cheap linear mixing / long-memory shaping
 *between* nonlinear stages — exactly the role the dilated convs play in the TCN,
@@ -36,7 +36,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation
+from vguitar.models.archive.tcn import _MixedActivation
 
 APPROACH = (
     "Alternate time-domain mixed-activation nonlinearities with a GLOBAL learned "

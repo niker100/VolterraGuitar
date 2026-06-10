@@ -59,7 +59,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation
+from vguitar.models.archive.tcn import _MixedActivation
 
 APPROACH = (
     "Lift to channels; alternate [framed-STFT complex 1x1 per-bin channel-mix -> ISTFT] "

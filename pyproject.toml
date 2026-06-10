@@ -11,12 +11,16 @@ dependencies = [
     "soxr>=0.5",          # high-quality, fast resampling (sim rate -> audio rate)
     "soundfile>=0.12",    # wav I/O
     "sounddevice>=0.5",   # real-time audio I/O (PortAudio)
-    "torch>=2.4",         # neural models; CUDA build on Windows (see [tool.uv] below) for GPU training
-    "matplotlib>=3.8",    # spectrograms / kernel plots
-    "rich>=13.7",         # readable benchmark tables
+    "matplotlib>=3.8",    # spectrograms / diagnostic plots
+    "rich>=13.7",         # readable tables
     "tqdm>=4.66",         # progress bars
-    "pyspice>=1.5",       # ngspice driver (circuit sim from Python)
+    "pyspice>=1.5",       # ngspice driver (ground-truth validator)
 ]
+
+[project.optional-dependencies]
+# the frozen neural/system-ID era under src/vguitar/models/archive/ (CIRCE3, TCN,
+# RNN, SSM, WH) -- install with `uv sync --extra neural` to re-run archived work
+neural = ["torch>=2.4"]
 
 [project.scripts]
 vguitar = "vguitar.cli:main"
@@ -74,7 +78,9 @@ exclude = ["legacy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+# tests/archive = the frozen neural era; run on demand with the `neural` extra:
+#   uv sync --extra neural; uv run pytest tests/archive
+addopts = "-q --ignore=tests/archive"
 
 [dependency-groups]
 dev = [

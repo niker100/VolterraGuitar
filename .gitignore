@@ -10,8 +10,11 @@ __pycache__/
 # --- Project artifacts (comments on their own line: gitignore has no inline comments) ---
 # generated SPICE datasets (large; reproducible from code)
 data/
-# plots, audio renders
-outputs/
+# plots, audio renders, archived raw results (local) -- EXCEPT the consolidated
+# knowledge store, which is the tracked machine-readable record of the
+# benchmarking era
+outputs/*
+!outputs/knowledge
 # training runs / checkpoints
 runs/
 *.pth

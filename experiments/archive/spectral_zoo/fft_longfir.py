@@ -34,7 +34,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation
+from vguitar.models.archive.tcn import _MixedActivation
 
 APPROACH = (
     "Learned long FIRs (L~1024) via rFFT fast-conv as cheap linear mixing, sandwiched "

@@ -1,13 +1,40 @@
-"""Conditioned offline-render tests for the realtime engine (no audio device)."""
+"""Conditioned offline-render tests for the realtime engine (no audio device).
+
+Uses a tiny numpy stub model (one-pole low-pass whose gain is the control) so the
+engine's wiring — per-block control resolution, render/stream equivalence — is
+tested without any model package dependency.
+"""
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
 import soundfile as sf
+from scipy.signal import lfilter
 
-from vguitar.models.circe3 import CIRCE3
 from vguitar.realtime.engine import _control_for_block, render_file
+
+
+class _OnePoleGain:
+    """Minimal conditioned streaming model: y = gain(control) * onepole(x).
+
+    Implements exactly the surface the engine touches: ``latency_samples``,
+    ``n_control``, ``reset()``, ``process_block(x, c=None)``.
+    """
+
+    latency_samples = 0
+    n_control = 1
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self._zi = np.zeros(1)
+
+    def process_block(self, x: np.ndarray, c: np.ndarray | None = None) -> np.ndarray:
+        g = float(c[0]) if c is not None else 1.0
+        y, self._zi = lfilter([0.1], [1.0, -0.9], np.asarray(x, np.float64), zi=self._zi)
+        return (g * y).astype(np.float32)
 
 
 def _write_wav(path, n: int = 4000, sr: int = 8000) -> str:
@@ -35,28 +62,28 @@ def test_control_for_block_modes() -> None:
 
 
 # --- render_file with control ----------------------------------------------
-@pytest.fixture(scope="module")
-def model() -> CIRCE3:
-    # Untrained is fine: render equivalence is about deterministic streaming, not accuracy.
-    return CIRCE3(n_control=1, channels=6, n_blocks=1, n_layers=4)
+@pytest.fixture()
+def model() -> _OnePoleGain:
+    return _OnePoleGain()
 
 
-def test_render_constant_vector_equals_callable(model: CIRCE3, tmp_path) -> None:
+def test_render_constant_vector_equals_callable(model: _OnePoleGain, tmp_path) -> None:
     inp = _write_wav(tmp_path / "in.wav")
     a, b = tmp_path / "a.wav", tmp_path / "b.wav"
     render_file(model, inp, str(a), sr=8000, control=np.array([1.5], np.float32))
+    model.reset()
     render_file(model, inp, str(b), sr=8000, control=lambda _bi: np.array([1.5], np.float32))
     assert np.allclose(_read(a), _read(b), atol=1e-6)
 
 
-def test_render_length_and_none_control(model: CIRCE3, tmp_path) -> None:
+def test_render_length_and_none_control(model: _OnePoleGain, tmp_path) -> None:
     inp = _write_wav(tmp_path / "in.wav", n=3333)
     out = tmp_path / "o.wav"
     render_file(model, inp, str(out), sr=8000, control=None)  # unconditioned path
     assert _read(out).shape[0] == 3333
 
 
-def test_render_schedule_matches_manual_loop(model: CIRCE3, tmp_path) -> None:
+def test_render_schedule_matches_manual_loop(model: _OnePoleGain, tmp_path) -> None:
     """render_file with a knob automation == a manual block loop feeding the same
     per-block control to process_block (the wiring is exact)."""
     inp = _write_wav(tmp_path / "in.wav")
@@ -83,7 +110,7 @@ def test_render_schedule_matches_manual_loop(model: CIRCE3, tmp_path) -> None:
     assert np.allclose(got, _read(man_path), atol=1e-6)
 
 
-def test_live_engine_constructs_with_control_fn(model: CIRCE3) -> None:
+def test_live_engine_constructs_with_control_fn(model: _OnePoleGain) -> None:
     from vguitar.config import RealtimeConfig
     from vguitar.realtime.engine import LiveEngine
 

@@ -1,0 +1,315 @@
+{
+  "schema_version": 1,
+  "generated": "2026-06-10T09:45:18+00:00",
+  "status": "frozen",
+  "headline_findings": [
+    "CIRCE3 (input-scaling dilated TCN, mixed activations, zero-init FiLM, 4 IIR state channels, 2x oversampling, ~60k params) is the frozen neural SOTA: 4/9 benchmark circuits under held-ESR 0.005 with one uniform config.",
+    "The worst resisting circuits (wavefolder 0.245, hard_clipper 0.058, hysteretic 0.014, fullwave) are all SYNTHETIC behavioral stress tests with non-physical discontinuities; realistic-component circuits were under target, near it, or still improving with data (crossover). This is the empirical case for the physical-emulator pivot.",
+    "Closed-form readouts (VarPro) are a 3x training speedup and sharper on smooth circuits, but pure closed-form fits plateau 10-100x off - trained features were the bottleneck, which a physical solver sidesteps entirely.",
+    "The biggest 'model failure' of the campaign was a measurement artifact (DC-blocker train/eval mismatch): always validate the eval path with a perfect-model floor test.",
+    "Training landmines catalogued: bf16 deterministically unsafe for this loss; big-batch needs LR warmup; GPU training is non-reproducible run-to-run; guard non-finite steps and retry collapses."
+  ],
+  "final_leaderboard": {
+    "asym_clipper": {
+      "model": "circe3",
+      "held_esr": 0.0008,
+      "pass_0p005": true
+    },
+    "tube_screamer": {
+      "model": "circe3",
+      "held_esr": 0.0026,
+      "pass_0p005": true
+    },
+    "bjt": {
+      "model": "circe3",
+      "held_esr": 0.0044,
+      "pass_0p005": true
+    },
+    "jfet": {
+      "model": "circe3",
+      "held_esr": 0.0045,
+      "pass_0p005": true
+    },
+    "fullwave_rectifier": {
+      "model": "circe3",
+      "held_esr": 0.0057,
+      "pass_0p005": false
+    },
+    "hysteretic_fuzz": {
+      "model": "circe3",
+      "held_esr": 0.0139,
+      "pass_0p005": false
+    },
+    "crossover": {
+      "model": "circe3",
+      "held_esr": 0.0154,
+      "pass_0p005": false
+    },
+    "hard_clipper": {
+      "model": "circe3",
+      "held_esr": 0.0578,
+      "pass_0p005": false
+    },
+    "wavefolder": {
+      "model": "circe3",
+      "held_esr": 0.2453,
+      "pass_0p005": false
+    }
+  },
+  "experiments": {
+    "families.benchmark": {
+      "phase": "model families",
+      "question": "Which model family emulates SPICE-simulated circuits best (FIR / Volterra / parallel-cascade / Wiener-Hammerstein / TCN / RNN / SSM / CIRCE3)?",
+      "verdict": "CIRCE3 (input-scaling TCN) wins accuracy on every circuit; classical closed-form fits (FIR/Volterra/WH) are seconds-fast but plateau 10-100x worse - they lack trained nonlinear features. RNN competitive but slower; SSM mid-field.",
+      "key_numbers": {
+        "circe3_esr_range": [
+          0.001,
+          0.005
+        ],
+        "volterra_esr_range": [
+          0.03,
+          0.3
+        ]
+      },
+      "links": {
+        "results": [
+          "outputs/archive/benchmark.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/compare_esr_matrix.png"
+        ]
+      }
+    },
+    "circe.architecture": {
+      "phase": "architecture",
+      "question": "What architecture choices matter for a TCN circuit emulator?",
+      "verdict": "Input-scaling (fold signal controls into input gain) beats conditioning nets; minimal zero-init FiLM for system controls; mixed activations (tanh/gelu/relu/abs/snake) beat gated on hard circuits, tie smooth; 2x internal oversampling removes aliasing (OS>2 measured WORSE); grad-clip 1.0 optimal; raw channel width inert and destabilizing.",
+      "key_numbers": {
+        "adopted": "ch24/nb2/L10, mixed act, OS2, ~60k params"
+      },
+      "links": {
+        "results": [
+          "outputs/archive/mixed_vs_gated_final.json",
+          "outputs/archive/radical_arch_ablation.json",
+          "outputs/archive/radical_gradclip_test.json",
+          "outputs/archive/wavefolder_os_ab.json"
+        ],
+        "docs": [
+          "docs/archive/optimal-architecture.md",
+          "docs/archive/CIRCE3-modelcard.md"
+        ]
+      }
+    },
+    "spectral.branch": {
+      "phase": "architecture",
+      "question": "Do spectral/frequency-domain hybrids (FNO, AFNO, STFT-mix, wavelet, global filter, 12 variants) beat the time-domain TCN?",
+      "verdict": "No uniform win anywhere; dropped entirely.",
+      "key_numbers": {},
+      "links": {
+        "results": [
+          "outputs/archive/spectral_zoo.json",
+          "outputs/archive/spectral_leads.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/spectral_zoo.png"
+        ]
+      }
+    },
+    "sota.dc_blocker_artifact": {
+      "phase": "sota campaign",
+      "question": "Why are the asymmetric circuits floored at ESR 0.05-0.17?",
+      "verdict": "MEASUREMENT ARTIFACT: training scored raw output but inference applied a 1 Hz DC blocker; circuits with real level-dependent output DC floored a perfect model (asym floor 0.0518). Fix: dcblock off (DC is genuine circuit output). asym_clipper 0.0523 -> 0.0007 (75x). Lesson: validate the eval path with a perfect-model floor test.",
+      "key_numbers": {
+        "asym_clipper": [
+          0.0523,
+          0.0007
+        ],
+        "wavefolder": [
+          0.2,
+          0.126
+        ]
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/dc_rebaseline.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/sota_dc_rebaseline.png"
+        ]
+      }
+    },
+    "sota.depth": {
+      "phase": "sota campaign",
+      "question": "Does ~2x receptive field (nb2/L10) move the near-miss circuits?",
+      "verdict": "Strong but mixed: cracks jfet (0.0094->0.0020), halves hard_clipper, helps fullwave, neutral bjt - but HURTS crossover (dead-zone prefers shallow). Adopted nb2/L10.",
+      "key_numbers": {
+        "jfet": [
+          0.0094,
+          0.002
+        ],
+        "hard_clipper": [
+          0.0933,
+          0.0558
+        ],
+        "crossover": [
+          0.0225,
+          0.0299
+        ]
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/depth_sweep.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/sota_depth_sweep.png"
+        ]
+      }
+    },
+    "sota.iir_memory": {
+      "phase": "sota campaign",
+      "question": "Can learnable one-pole IIR state channels give the TCN the long memory hysteretic_fuzz needs (tau 22-440ms >> 21ms receptive field)?",
+      "verdict": "Directionally yes (-29% hysteretic, -18% crossover at prototype), adopted as n_state=4 with ZERO-INIT input weights (random init perturbs memoryless circuits). But extensions (8 poles, tau to 2s, 2x window) were all flat-to-worse: linear memory saturates; true hysteresis needs input-DEPENDENT (gated) state - never built (pivot).",
+      "key_numbers": {
+        "hysteretic_prototype_delta_pct": -29,
+        "best_hysteretic": 0.0139
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/iir_probe.json",
+          "outputs/archive/sota/memory_probe.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/lever_iir_probe.png"
+        ]
+      }
+    },
+    "sota.corners_inert": {
+      "phase": "sota campaign",
+      "question": "Do rectified input features / learnable corner thresholds / Fourier output shapers crack the discontinuity circuits?",
+      "verdict": "All INERT (thresholds never move from init; SGD finds no gradient use). Input-side corner primitives do not help; the untried placement was a parallel PWL waveshaper path from the input (Wiener-style).",
+      "key_numbers": {
+        "hard_clipper_delta_pct": -1
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/corner_probe.json",
+          "outputs/archive/sota/probe_levers.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/lever_corner_probe.png"
+        ]
+      }
+    },
+    "sota.data_volume": {
+      "phase": "sota campaign",
+      "question": "Does 3x training data (seg_dur 8s regenerated sweeps) lower held-ESR?",
+      "verdict": "Big where data-limited: tube_screamer -47% (0.0027), crossover -32%, jfet -16..-35%, hard_clipper -9%. FLAT on fullwave and hysteretic (not data-limited). v2 sweeps were adopted into the protocol.",
+      "key_numbers": {
+        "tube_screamer": [
+          0.0051,
+          0.0027
+        ],
+        "crossover": [
+          0.0413,
+          0.0282
+        ],
+        "jfet_b12": [
+          0.0053,
+          0.0034
+        ]
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/data_v2_ab.json",
+          "outputs/archive/sota/data_v2_ab_b12.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/lever_data_v2_ab.png"
+        ]
+      }
+    },
+    "closedform.elm_hammerstein": {
+      "phase": "closed form",
+      "question": "Can pure closed-form fits (random features + ridge lstsq; structured Hammerstein basis) reach the 0.005 bar without backprop?",
+      "verdict": "No: ~5s fits but plateau at 0.03-0.3 ESR regardless of width - a feature-QUALITY limit, not feature count. Hammerstein worse than random features (too shallow). Closed-form readout on trained features (VarPro) is the keeper instead.",
+      "key_numbers": {
+        "elm_jfet": 0.035,
+        "elm_hard_clipper": 0.21,
+        "fit_seconds": 5
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/elm_probe.json",
+          "outputs/archive/sota/hammerstein_probe.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/sota_probe_wall.png"
+        ]
+      }
+    },
+    "closedform.varpro": {
+      "phase": "closed form",
+      "question": "Does Variable Projection (closed-form ridge solve of the linear readout inside the training loop, Golub-Pereyra) beat joint SGD?",
+      "verdict": "Major speed/accuracy tool on SMOOTH circuits: ~3x fewer epochs, and on the strong architecture also sharper minima (jfet 0.0010 vs 0.0045). fp64 solve is a trap on consumer GPUs (1/64 throughput) - fp32 + scale-relative ridge matches joint per-epoch cost. NOT uniform-safe: breaks discontinuity circuits (wavefolder 0.245 -> 0.84). VarPro x big-batch ANTI-compounds (trunk needs small-batch gradient noise).",
+      "key_numbers": {
+        "jfet": [
+          0.0045,
+          0.001
+        ],
+        "epochs_to_plateau_ratio": 3,
+        "vp60_b12_speedup": 3.0
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/unified_varpro.json",
+          "outputs/archive/sota/varpro_conv.json",
+          "outputs/archive/sota/fast_stack.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/varpro_conv.png",
+          "outputs/archive/figs/frontier/fast_stack.png"
+        ]
+      }
+    },
+    "training.stability": {
+      "phase": "training",
+      "question": "Why do training runs stochastically collapse to held-ESR ~1.0?",
+      "verdict": "A degenerate predict-mean basin entered in the first epochs. bf16 AMP lands there DETERMINISTICALLY on some circuit x batch combos (8-bit mantissa rounds away early gradient signal - 16-bit training disqualified); fp32 big-batch lands there stochastically (GPU nondeterminism; same seed, different outcome). Fixes: 5-epoch LR warmup (free), non-finite step guard, collapse retry-with-shifted-seed. Wall-clock measurements across processes are contaminated by desktop GPU contention - only in-process ratios are meaningful.",
+      "key_numbers": {
+        "collapse_rate_no_warmup_b96": "2/3 on bjt",
+        "b12_warmup_cost": "none (0.0044 == 0.0044)"
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/speed_ab.json",
+          "outputs/archive/sota/hc_diag.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/speed_ab.png",
+          "outputs/archive/figs/frontier/hc_diag.png"
+        ]
+      }
+    },
+    "sota.final_state": {
+      "phase": "sota campaign",
+      "question": "Where did the uniform <0.005 push end?",
+      "verdict": "4/9 circuits under held-ESR 0.005 with one uniform config (dcblock off + nb2/L10 + n_state=4 + OS2): asym 0.0008, ts 0.0026, bjt 0.0044, jfet 0.0045; fullwave 0.0057 near. The WORST failures (wavefolder 0.245, hard_clipper 0.058, hysteretic 0.014, fullwave) are all SYNTHETIC behavioral B-source circuits (sin-fold map, tanh(60x) knee, behavioral hysteresis/abs); the one realistic circuit above target, crossover (0.0154), was still improving with data (-32% at 3x). This motivated the pivot: realistic circuits + physical DK solver instead of ever-larger trained black boxes.",
+      "key_numbers": {
+        "under_target": 4,
+        "of": 9,
+        "wavefolder_floor": 0.245
+      },
+      "links": {
+        "results": [
+          "outputs/archive/sota/unified_varpro.json"
+        ],
+        "figures": [
+          "outputs/archive/figs/frontier/sota_unified_varpro.png"
+        ],
+        "docs": [
+          "docs/archive/sota-campaign.md"
+        ]
+      }
+    }
+  }
+}

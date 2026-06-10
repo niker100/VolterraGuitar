@@ -1,4 +1,4 @@
-﻿"""Train the spectral-operator zoo head-to-head + anchor baselines.
+"""Train the spectral-operator zoo head-to-head + anchor baselines.
 
 Loads every variant Net from experiments/spectral_zoo/, wraps it in CIRCE3's
 training machinery (OS1, input-scaling, pre-emph+ESR loss, grad-clip â€” same harness
@@ -27,7 +27,7 @@ import torch
 from experiments.archive.spectral_probe import SpectralHybrid, _eval
 from experiments.common import load_pair, make_log
 from vguitar.config import TrainConfig
-from vguitar.models.circe3 import CIRCE3
+from vguitar.models.archive.circe3 import CIRCE3
 
 EPOCHS = 150
 CIRCUITS = [("bjt", "bjt_bench_sweep", "bjt_bench_fp_test", "strong"),

@@ -15,8 +15,8 @@ from vguitar import plotting as plot
 from vguitar.circuits import get_circuit
 from vguitar.config import Config, TrainConfig
 from vguitar.data import Dataset
+from vguitar.models.archive.circe3 import CIRCE3
 from vguitar.models.base import pick_device, to_inference_cpu
-from vguitar.models.circe3 import CIRCE3
 from vguitar.spice.runner import simulate
 
 

@@ -21,7 +21,7 @@ import torch
 from vguitar import metrics as M
 from vguitar.config import TrainConfig
 from vguitar.data import Dataset
-from vguitar.models.circe3 import CIRCE3, _segments
+from vguitar.models.archive.circe3 import CIRCE3, _segments
 
 EPOCHS = 150
 CIRCUITS = [

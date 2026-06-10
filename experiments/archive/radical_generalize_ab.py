@@ -34,9 +34,9 @@ from torch import nn
 
 from vguitar import metrics as M
 from vguitar.data import Dataset
-from vguitar.losses import esr_loss, preemph_esr_loss
+from vguitar.models.archive.circe3 import _segments
+from vguitar.models.archive.losses import esr_loss, preemph_esr_loss
 from vguitar.models.base import pick_device
-from vguitar.models.circe3 import _segments
 
 EPOCHS = 60
 SEQ, HOP, BATCH = 4096, 2048, 12

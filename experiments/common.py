@@ -42,7 +42,7 @@ def held_esr(model: object, test: Dataset, *, warmup: int = 2048) -> float:
     Feeds the segment's input at its control value through ``model.process``, shifts
     by ``model.latency_samples`` (oversampling group delay), and scores ESR past the
     warm-up. The single eval every probe uses to compare configs."""
-    from vguitar.models.circe3 import _segments
+    from vguitar.models.archive.circe3 import _segments
 
     s, e = _segments(test.controls)[0]
     x = np.ascontiguousarray(test.x[s:e], np.float32)

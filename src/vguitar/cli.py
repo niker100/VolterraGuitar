@@ -14,19 +14,19 @@ Design choices:
   and a missing optional piece produces a friendly message instead of an import
   traceback at startup.
 * Defaults come straight from :class:`vguitar.config.Config`; flags only
-  override the few fields a user typically tweaks (duration, seed, epochs).
+  override the few fields a user typically tweaks (duration, seed).
 
-Subcommands: ``list``, ``gen``, ``train``, ``bench``, ``benchmark``, ``live``,
-``plots``, ``selftest``.
+Subcommands: ``list``, ``gen``, ``plots``, ``selftest``. The neural-era commands
+(``train``/``bench``/``benchmark``/``live``) are archived stubs until the DK
+emulator lands (``build``/``validate``/``live`` return in the new system).
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -134,207 +134,20 @@ def cmd_gen(args: argparse.Namespace, cfg: Config) -> int:
     return 0
 
 
-# --- train ----------------------------------------------------------------
-def cmd_train(args: argparse.Namespace, cfg: Config) -> int:
-    """Load-or-generate the dataset, fit one model, save it, print test ESR."""
-    from dataclasses import replace
-
-    from vguitar.metrics import esr, plot_compare
-    from vguitar.models.base import get_model
-
-    cfg.paths.ensure()
-    if args.epochs is not None:
-        cfg = replace(cfg, train=replace(cfg.train, epochs=args.epochs))
-
-    try:
-        model_cls = get_model(args.model)
-    except KeyError as exc:
-        return _fail(str(exc))
-
-    try:
-        ds = _load_or_make_dataset(cfg, args.circuit, make=True)
-    except (KeyError, RuntimeError) as exc:
-        return _fail(str(exc))
-
-    train, val, test = ds.split(cfg.train.val_fraction, cfg.train.test_fraction)
-    model = model_cls()
-    print(f"training {model.name} on {args.circuit} ({model.num_params()} params)...")
-    report = model.fit(train, val, cfg.train)
-
-    pred = model.process(test.x)
-    test_esr = esr(test.y, pred)
-    run = _run_path(cfg, args.circuit, args.model)
-    model.save(run)
-    print(f"saved {run}")
-    if report.final_val_loss is not None:
-        print(f"  final val loss : {report.final_val_loss:.4e}")
-    print(f"  test ESR : {test_esr:.4e}")
-
-    fig = cfg.paths.outputs / f"{args.circuit}_{args.model}_test.png"
-    plot_compare(test.y, pred, test.sr, fig)
-    print(f"  comparison plot : {fig}")
-    return 0
+# --- archived neural-era commands ------------------------------------------
+#: commands frozen with the neural benchmarking era; intercepted before argparse
+#: so any legacy flags still get the friendly pointer instead of a usage error.
+_ARCHIVED_COMMANDS = ("train", "bench", "benchmark", "live")
 
 
-# --- bench ----------------------------------------------------------------
-def cmd_bench(args: argparse.Namespace, cfg: Config) -> int:
-    """Run the benchmark over the requested models and print the leaderboard."""
-    cfg.paths.ensure()
-    try:
-        from vguitar.benchmark import run_benchmark
-    except ImportError as exc:
-        return _fail(f"benchmark module unavailable: {exc}")
-
-    models = [m.strip() for m in args.models.split(",")] if args.models else None
-    try:
-        run_benchmark(args.circuit, model_names=models, cfg=cfg)
-    except (KeyError, RuntimeError, FileNotFoundError) as exc:
-        return _fail(str(exc))
-    return 0
-
-
-# --- live -----------------------------------------------------------------
-def _control_specs_for(circ: Any, model: Any) -> list:
-    """Control specs for a conditioned model: the circuit's, or generic c0..cK-1."""
-    from vguitar.circuits.base import ControlSpec
-
-    n = int(getattr(model, "n_control", 0))
-    if n <= 0:
-        return []
-    if circ.controls and len(circ.controls) == n:
-        return list(circ.controls)
-    names = ["drive"] if n == 1 else [f"c{i}" for i in range(n)]
-    return [ControlSpec(nm) for nm in names]
-
-
-def _control_value_fn(control_str: str | None, automation_path: str | None, specs: list) -> Any:
-    """Build ``value_at(t_seconds) -> (K,) vector`` from --control / --automation.
-
-    ``--control "drive=0.08,tone=0.6"`` is a constant; ``--automation file.json``
-    is a list of breakpoints ``[{"t": sec, <name>: val, ...}, ...]`` linearly
-    interpolated over time. Returns ``None`` when neither is given.
-    """
-    if not specs:
-        return None
-    names = [s.name for s in specs]
-    base = np.array([s.default for s in specs], dtype=np.float32)
-    idx = {nm: i for i, nm in enumerate(names)}
-
-    def vec_from(d: dict) -> np.ndarray:
-        v = base.copy()
-        for k, val in d.items():
-            if k in idx:
-                v[idx[k]] = float(val)
-        return v
-
-    if automation_path:
-        import json
-
-        bps = sorted(json.loads(Path(automation_path).read_text()), key=lambda b: float(b.get("t", 0.0)))
-        ts = np.array([float(b.get("t", 0.0)) for b in bps], dtype=np.float64)
-        vecs = np.array([vec_from(b) for b in bps], dtype=np.float32)
-
-        def value_at(t: float) -> np.ndarray:
-            if t <= ts[0]:
-                return vecs[0]
-            if t >= ts[-1]:
-                return vecs[-1]
-            j = int(np.searchsorted(ts, t))
-            w = (t - ts[j - 1]) / (ts[j] - ts[j - 1]) if ts[j] > ts[j - 1] else 0.0
-            return ((1.0 - w) * vecs[j - 1] + w * vecs[j]).astype(np.float32)
-
-        return value_at
-
-    if control_str:
-        d = {k.split("=")[0].strip(): k.split("=", 1)[1].strip()
-             for k in control_str.split(",") if "=" in k}
-        const = vec_from(d)
-
-        def value_at(_t: float) -> np.ndarray:
-            return const
-
-        return value_at
-    return None
-
-
-def cmd_live(args: argparse.Namespace, cfg: Config) -> int:
-    """Load a trained model and either render a WAV pair or run the live engine."""
-    from dataclasses import replace
-
-    from vguitar.models.base import get_model
-
-    if args.device is not None:
-        rt = replace(cfg.realtime, input_device=args.device, output_device=args.device)
-        cfg = replace(cfg, realtime=rt)
-
-    run = _run_path(cfg, args.circuit, args.model)
-    if not run.exists():
-        packaged = cfg.paths.assets / "checkpoints" / f"{args.circuit}.{args.model}.model"
-        if packaged.exists():
-            run = packaged
-        else:
-            return _fail(
-                f"no trained model at {run}; "
-                f"run 'vguitar train --circuit {args.circuit} --model {args.model}' first"
-            )
-
-    try:
-        model_cls = get_model(args.model)
-    except KeyError as exc:
-        return _fail(str(exc))
-    model = model_cls.load(run)
-
-    # Optional control source for a conditioned model (e.g. CIRCE).
-    from vguitar.circuits import get_circuit
-
-    specs = _control_specs_for(get_circuit(args.circuit), model)
-    value_at = _control_value_fn(getattr(args, "control", None), getattr(args, "automation", None), specs)
-    if value_at is not None and not specs:
-        print("  (model is not conditioned; ignoring --control/--automation)")
-        value_at = None
-
-    if args.in_wav or args.out_wav:
-        if not (args.in_wav and args.out_wav):
-            return _fail("both --in and --out are required for file rendering")
-        try:
-            from vguitar.realtime import render_file
-        except ImportError as exc:
-            return _fail(f"realtime module unavailable: {exc}")
-        control = None
-        if value_at is not None:
-            sr = cfg.realtime.sr
-
-            def control(bi: int) -> np.ndarray:
-                return value_at(bi * 1024 / sr)
-
-        render_file(model, args.in_wav, args.out_wav, cfg.realtime.sr, control=control)
-        print(f"rendered {args.in_wav} -> {args.out_wav}")
-        return 0
-
-    try:
-        import sounddevice as sd
-
-        from vguitar.realtime import LiveEngine
-    except ImportError as exc:
-        return _fail(f"realtime module unavailable: {exc}")
-    control_fn = None
-    if value_at is not None:
-        bs, sr = cfg.realtime.block_size, cfg.realtime.sr
-
-        def control_fn(bi: int) -> np.ndarray:
-            return value_at(bi * bs / sr)
-
-    engine = LiveEngine(model, cfg.realtime, control_fn=control_fn)
-    print("starting live engine (Ctrl-C to stop)...")
-    try:
-        engine.start()
-        while True:  # block the main thread; audio runs on PortAudio's thread
-            sd.sleep(200)
-    except KeyboardInterrupt:
-        print("\nstopped.")
-    finally:
-        engine.stop()
-    return 0
+def _archived_stub(command: str) -> int:
+    """Friendly stub for the frozen neural-era commands."""
+    return _fail(
+        f"'{command}' is archived with the neural benchmarking era "
+        "(see docs/archive/sota-campaign.md and outputs/knowledge/findings.json). "
+        "The physical DK emulator replaces it: 'vguitar build / validate / live' "
+        "arrive with the new system."
+    )
 
 
 # --- selftest -------------------------------------------------------------
@@ -485,57 +298,15 @@ def cmd_selftest(args: argparse.Namespace, cfg: Config) -> int:
 
 
 # --- plots ----------------------------------------------------------------
-def _find_model_file(cfg: Config, circuit: str, model: str) -> Path | None:
-    """Locate a trained model file, tolerating both naming conventions."""
-    for cand in (cfg.paths.runs / f"{circuit}.{model}.model", cfg.paths.runs / f"{circuit}_{model}"):
-        if cand.exists():
-            return cand
-    return None
-
-
-def _read_bench_csv(cfg: Config, circuit: str) -> list[dict]:
-    """Parse a saved benchmark CSV into leaderboard rows (for the plot)."""
-    import csv
-
-    path = cfg.paths.outputs / f"{circuit}_benchmark.csv"
-    if not path.exists():
-        return []
-    rows: list[dict] = []
-    with open(path, newline="") as f:
-        for r in csv.DictReader(f):
-            if r.get("error"):
-                rows.append({"model": r["model"], "error": r["error"]})
-                continue
-            with contextlib.suppress(KeyError, ValueError):
-                rows.append({
-                    "model": r["model"], "esr": float(r["esr"]), "rtf": float(r["rtf"]),
-                    "realtime": r["realtime"] == "True", "params": int(r["params"]),
-                })
-    return rows
-
-
 def cmd_plots(args: argparse.Namespace, cfg: Config) -> int:
-    """Render the clean diagnostic figure set for a circuit to outputs/figs/."""
+    """Render the circuit diagnostic figures (dataset + transfer + harmonics)."""
     from vguitar import plotting as plot
     from vguitar.circuits import get_circuit
-    from vguitar.models import all_models, get_model
 
     try:
         ds = _load_or_make_dataset(cfg, args.circuit, make=False)
     except FileNotFoundError as exc:
         return _fail(str(exc))
-
-    names = [m.strip() for m in args.models.split(",")] if args.models else sorted(all_models())
-    models = {}
-    for name in names:
-        path = _find_model_file(cfg, args.circuit, name)
-        if path is None:
-            print(f"  (skip {name}: no trained model in {cfg.paths.runs})")
-            continue
-        try:
-            models[name] = get_model(name).load(path)
-        except Exception as exc:  # a stale/incompatible checkpoint shouldn't abort
-            print(f"  (skip {name}: load failed: {exc})")
 
     outdir = cfg.paths.outputs / "figs"
     outdir.mkdir(parents=True, exist_ok=True)
@@ -552,62 +323,25 @@ def cmd_plots(args: argparse.Namespace, cfg: Config) -> int:
 
     _save(plot.fig_dataset(ds.x, ds.y, sr, name=args.circuit), "dataset")
 
-    _, _, test = ds.split(cfg.train.val_fraction, cfg.train.test_fraction)
-    if models:
-        preds = {n: m.process(test.x) for n, m in models.items()}
-        _save(plot.fig_waveform(test.y, preds, sr, name=args.circuit), "waveform")
-
     # Probes through the real circuit (needs ngspice) for transfer + harmonics.
     try:
         from vguitar.spice.runner import simulate
 
         circ = get_circuit(args.circuit)
-        amp = float(np.max(np.abs(ds.x)))  # probe within the trained amplitude range
+        amp = float(np.max(np.abs(ds.x)))  # probe within the dataset amplitude range
         x_slow = (amp * np.sin(2 * np.pi * 40 * np.arange(int(0.05 * sr)) / sr)).astype(np.float32)
         y_slow = simulate(circ, x_slow, sr)
-        _save(
-            plot.fig_transfer(x_slow, y_slow, {n: m.process(x_slow) for n, m in models.items()},
-                              name=args.circuit), "transfer")
+        _save(plot.fig_transfer(x_slow, y_slow, {}, name=args.circuit), "transfer")
         x_tone = (circ.nominal_drive_v * np.sin(2 * np.pi * 1000 * np.arange(int(0.2 * sr)) / sr)
                   ).astype(np.float32)
         y_tone = simulate(circ, x_tone, sr)
-        _save(
-            plot.fig_harmonics(y_tone, {n: m.process(x_tone) for n, m in models.items()}, sr,
-                               f0=1000.0, name=args.circuit), "harmonics")
+        _save(plot.fig_harmonics(y_tone, {}, sr, f0=1000.0, name=args.circuit), "harmonics")
     except Exception as exc:  # ngspice missing / sim error: skip these two
         print(f"  (skip transfer/harmonics: {exc})")
-
-    from vguitar.models.volterra_reg import VolterraReg
-
-    vm = models.get("volterra")
-    if isinstance(vm, VolterraReg) and vm.h1 is not None:
-        _save(plot.fig_volterra_kernels(vm.h1, vm._H2, vm._H3, sr), "kernels")
-
-    rows = _read_bench_csv(cfg, args.circuit)
-    if rows:
-        _save(plot.fig_leaderboard(rows, name=args.circuit), "leaderboard")
 
     print(f"wrote {len(saved)} figures to {outdir}:")
     for s in saved:
         print(f"  {s}")
-    return 0
-
-
-def cmd_benchmark(args: argparse.Namespace, cfg: Config) -> int:
-    """Run the CIRCE3-vs-architectures comparison and write the insightful figures."""
-    try:
-        from vguitar.benchmark.compare import run_compare
-    except ImportError as exc:
-        return _fail(f"benchmark/compare unavailable: {exc}")
-    circuits = [c.strip() for c in args.circuits.split(",") if c.strip()]
-    from vguitar.benchmark.compare import _BASELINES, _GPU_BASELINES
-
-    baselines = _GPU_BASELINES if args.no_cpu_baselines else _BASELINES
-    try:
-        run_compare(circuits, cfg=cfg, epochs=args.epochs, regen=args.regen,
-                    baselines=baselines)
-    except (KeyError, RuntimeError, FileNotFoundError) as exc:
-        return _fail(str(exc))
     return 0
 
 
@@ -631,59 +365,23 @@ def _build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--seed", type=int, default=Config().data.seed, help="excitation RNG seed")
     sp.set_defaults(func=cmd_gen)
 
-    sp = sub.add_parser("train", help="train one model on a circuit dataset")
-    sp.add_argument("--circuit", required=True, help="circuit name")
-    sp.add_argument("--model", required=True, help="model name (see 'vguitar list')")
-    sp.add_argument("--epochs", type=int, default=None, help="override training epochs")
-    sp.set_defaults(func=cmd_train)
-
-    sp = sub.add_parser("bench", help="benchmark models on a circuit and print a leaderboard")
-    sp.add_argument("--circuit", required=True, help="circuit name")
-    sp.add_argument("--models", default=None, help="comma-separated model names (default: all)")
-    sp.set_defaults(func=cmd_bench)
-
-    sp = sub.add_parser("live", help="run a trained model on a WAV or live audio")
-    sp.add_argument("--circuit", required=True, help="circuit name")
-    sp.add_argument("--model", required=True, help="model name")
-    sp.add_argument("--in", dest="in_wav", default=None, help="input WAV (offline render)")
-    sp.add_argument("--out", dest="out_wav", default=None, help="output WAV (offline render)")
-    sp.add_argument("--device", type=int, default=None, help="PortAudio device index")
-    sp.add_argument("--control", default=None,
-                    help="conditioned model: constant knobs, e.g. 'drive=0.08,tone=0.6'")
-    sp.add_argument("--automation", default=None,
-                    help="conditioned model: JSON breakpoints [{\"t\":sec,<name>:val,...}] (knob automation)")
-    sp.set_defaults(func=cmd_live)
-
     sp = sub.add_parser("selftest", help="smoke-test every model and the ngspice path")
     sp.set_defaults(func=cmd_selftest)
 
-    sp = sub.add_parser("plots", help="render the clean diagnostic figure set to outputs/figs/")
+    sp = sub.add_parser("plots", help="render circuit diagnostic figures to outputs/figs/")
     sp.add_argument("--circuit", required=True, help="circuit name")
-    sp.add_argument("--models", default=None, help="comma-separated model names (default: all trained)")
     sp.set_defaults(func=cmd_plots)
-
-    sp = sub.add_parser(
-        "benchmark",
-        help="compare CIRCE3 vs the other architectures across circuits; emit insightful figures",
-    )
-    sp.add_argument("--circuits", required=True, help="comma-separated circuit names")
-    sp.add_argument("--epochs", type=int, default=150,
-                    help="training epochs per neural method (150 = speed/quality sweet spot; "
-                         "cosine-LR has converged by then and 300 can overfit hard circuits)")
-    sp.add_argument("--regen", action="store_true", help="re-simulate the benchmark datasets")
-    sp.add_argument("--no-cpu-baselines", action="store_true",
-                    help="race only the GPU-efficient informative baseline (tcn); skip the "
-                         "CPU-only numpy fits (volterra/wh) and the launch-bound LSTM (rnn): "
-                         "they idle the GPU for numbers that don't change the verdict")
-    sp.set_defaults(func=cmd_benchmark)
 
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     """Parse ``argv`` and dispatch to the chosen subcommand's handler."""
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw and raw[0] in _ARCHIVED_COMMANDS:
+        return _archived_stub(raw[0])
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw)
     return int(args.func(args, Config()))
 
 

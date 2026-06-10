@@ -38,7 +38,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation
+from vguitar.models.archive.tcn import _MixedActivation
 
 APPROACH = "Learnable multi-level DWT -> per-subband mixed nonlinearity + 1x1 mix -> IDWT + residual waveshaper"
 COST = (

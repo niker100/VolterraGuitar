@@ -30,7 +30,9 @@ __all__ = [
     "register_model",
 ]
 
-_SKIP = {"base"}
+# "archive" = the frozen neural/system-ID era (torch-dependent, never auto-registered;
+# see models/archive/__init__.py). Import explicitly on demand.
+_SKIP = {"base", "archive"}
 
 
 def _autodiscover() -> None:

@@ -24,7 +24,7 @@ import numpy as np
 
 from vguitar import metrics as M
 from vguitar.data import Dataset
-from vguitar.models.circe3 import _segments
+from vguitar.models.archive.circe3 import _segments
 
 CIRCUITS = [
     ("bjt", "bjt_bench_fp_test", "smooth"),

@@ -43,7 +43,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation
+from vguitar.models.archive.tcn import _MixedActivation
 
 APPROACH = (
     "FNO-1D: per-layer rFFT -> keep K low modes -> learned complex per-channel "

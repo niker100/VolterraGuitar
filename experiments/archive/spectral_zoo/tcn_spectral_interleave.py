@@ -36,7 +36,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from vguitar.models.tcn import _MixedActivation, _MixedLayer
+from vguitar.models.archive.tcn import _MixedActivation, _MixedLayer
 
 APPROACH = (
     "Mixed-activation dilated TCN, half its layers swapped for spectral global-mixers "

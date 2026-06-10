@@ -37,8 +37,8 @@ from torch import nn
 
 from experiments.common import load_pair, make_log
 from vguitar.config import TrainConfig
-from vguitar.models.circe3 import CIRCE3, _segments
-from vguitar.models.tcn import _MixedLayer
+from vguitar.models.archive.circe3 import CIRCE3, _segments
+from vguitar.models.archive.tcn import _MixedLayer
 
 EPOCHS = 150
 N_FFT = 1024
