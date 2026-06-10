@@ -30,17 +30,22 @@ from vguitar.config import TrainConfig
 from vguitar.data import Dataset
 from vguitar.models.circe3 import CIRCE3
 
-#: circuit key -> (drive-sweep dataset, held-out test dataset, kind)
+#: circuit key -> (drive-sweep dataset, held-out test dataset, kind).
+#: PROTOCOL CHANGE 2026-06-10: the 6 regenerated *_v2 sweeps (seg_dur 8 s, ~3x data)
+#: are adopted after the data_v2_ab A/B (ts -47%, crossover -32%, jfet -16%,
+#: hard_clipper -9%, fullwave/hysteretic flat, nothing worse). TEST SETS UNCHANGED,
+#: so held-ESR stays comparable; pre-v2 sweep numbers are historical.
 CIRCUITS: dict[str, tuple[str, str, str]] = {
     "bjt": ("bjt_bench_sweep", "bjt_bench_fp_test", "smooth"),
-    "jfet": ("jfet_bench_sweep", "jfet_bench_fp_test", "smooth"),
-    "tube_screamer": ("tube_screamer_bench_sweep", "tube_screamer_bench_fp_test", "smooth"),
-    "crossover": ("crossover_classb_edge_sweep", "crossover_classb_edge_test", "hard"),
+    "jfet": ("jfet_bench_sweep_v2", "jfet_bench_fp_test", "smooth"),
+    "tube_screamer": ("tube_screamer_bench_sweep_v2", "tube_screamer_bench_fp_test", "smooth"),
+    "crossover": ("crossover_classb_edge_sweep_v2", "crossover_classb_edge_test", "hard"),
     "wavefolder": ("wavefolder_edge_sweep", "wavefolder_edge_test", "hard"),
     "asym_clipper": ("asym_clipper_edge_sweep", "asym_clipper_edge_test", "hard"),
-    "hard_clipper": ("hard_clipper_edge_sweep", "hard_clipper_edge_test", "hard"),
-    "fullwave_rectifier": ("fullwave_rectifier_edge_sweep", "fullwave_rectifier_edge_test", "hard"),
-    "hysteretic_fuzz": ("hysteretic_fuzz_edge_sweep", "hysteretic_fuzz_edge_test", "hard"),
+    "hard_clipper": ("hard_clipper_edge_sweep_v2", "hard_clipper_edge_test", "hard"),
+    "fullwave_rectifier": ("fullwave_rectifier_edge_sweep_v2",
+                           "fullwave_rectifier_edge_test", "hard"),
+    "hysteretic_fuzz": ("hysteretic_fuzz_edge_sweep_v2", "hysteretic_fuzz_edge_test", "hard"),
 }
 SMOOTH = [k for k, v in CIRCUITS.items() if v[2] == "smooth"]
 HARD = [k for k, v in CIRCUITS.items() if v[2] == "hard"]

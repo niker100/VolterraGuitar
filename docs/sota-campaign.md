@@ -51,10 +51,12 @@ ts 0.0026 ✅, bjt 0.0044 ✅, jfet 0.0045 ✅ — then fullwave 0.0057, hystere
    retry → safe-b12 fallback), finals at b12/lr3/warm5. b384 exceeds the card
    (WDDM swaps instead of OOM-ing — never again). Next: `fast_stack` (VarPro ×
    b96 × warmup on smooth circuits, running).
-2. **Data volume** (`data_v2_ab`, resumable): 3× data moved jfet 0.0053 → 0.0034
-   (−35%) — likely the cheapest lever for fullwave/crossover/hysteretic/
-   hard_clipper. Re-run on the adopted fast config.
-3. **fullwave 0.0057 (near):** multi-seed + data-v2 should cross it.
+2. **DONE — data volume (`data_v2_ab`):** 3× data wins big where the circuit is
+   data-limited (ts −47% → 0.0027, crossover −32%, jfet −16%, hard_clipper −9%)
+   and is flat on fullwave/hysteretic. **v2 sweeps adopted into the protocol**
+   (tests unchanged); `unified_v2` multi-seed finals queued.
+3. **fullwave 0.0057 (near):** NOT data-limited (v2 flat) — multi-seed first,
+   then depth/window.
 4. **hysteretic 0.0139 (memory):** IIR lever validated (−29% at prototype);
    probe n_state=8, longer τ-init range, seq_len 8192 (τ up to 440 ms vs 93 ms
    training window).
@@ -470,3 +472,25 @@ is solved optimally each step (the b96 stack is uniformly worse than vp60_b12 de
 2x more wall-clock at 150 ep). So the two speed tools serve different jobs:
 **vp60_b12** for smooth-circuit iteration (accuracy-critical), **SCREEN b96/w5 +
 retry** for standard-training A/B probes (speed-critical, relative comparisons).
+
+### Data-volume verdict + v2 adoption (`data_v2_ab`, 2026-06-10)
+
+Original vs regenerated 3x sweeps (seg_dur 8 s), unchanged tests, SCREEN training,
+within-config relative A/B. Fig: `lever_data_v2_ab` (the killed b12-config run's
+jfet pair is archived as `lever_data_v2_ab_b12`: 0.0053 → 0.0034, −35% — replicated
+here directionally at −16%).
+
+| circuit | orig | v2 | delta | read |
+|---|---|---|---|---|
+| tube_screamer | 0.0051 | **0.0027** | **−47%** | data-limited, cracked at SCREEN |
+| crossover | 0.0413 | 0.0282 | −32% | data helps; (also: crossover degrades badly at b96 — SCREEN numbers ≠ b12 leaderboard) |
+| jfet | 0.0046 | 0.0038 | −16% | replicates the b12 finding |
+| hard_clipper | 0.0590 | 0.0535 | −9% | small win |
+| fullwave_rectifier | 0.0056 | 0.0057 | +1% | **not data-limited** — its 0.0056 plateau needs another lever |
+| hysteretic_fuzz | 0.0186 | 0.0194 | +4% | **not data-limited** — memory-limited as diagnosed (`memory_probe` running) |
+
+**Adopted:** the 6 v2 sweeps replace the originals in `harness.CIRCUITS` (protocol
+change; tests unchanged so held-ESR stays comparable; pre-v2 numbers historical).
+Note: the in-flight `memory_probe` imported the old map — its relative A/B (orig
+sweeps) stays valid; winners get confirmed on v2 in finals. `unified_v2` (multi-seed
+finals on v2) queued behind it.
